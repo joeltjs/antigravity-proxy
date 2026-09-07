@@ -9,7 +9,7 @@ OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity acco
 
 ## What's New in v2.3.0
 
-- **Deterministic Context & Prompt Cache Optimization:** Automatic session ID derivation (`resolve_client_session_id`) using conversation seed hashing, enabling Google Antigravity to reuse prompt caches across turns and cutting token usage by up to 90%.
+- **Prompt Cache Optimization:** Improved optimizer and increased cache hit rate using conversation seed hashing.
 - **Modular Core Architecture:** Refactored into clean, maintainable sub-modules under `core/` (`account_manager`, `translator`, `optimizers`, `response_formatter`) and `templates/`.
 - **Built-in Token Optimization Plugins:**
   - **RTK (Reduced Tool Kit):** Shell & terminal output trimmer that cuts out verbose build traces, package installation logs, and noisy traceback middles (Save ~30% - 50% input tokens).
