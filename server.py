@@ -1075,7 +1075,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self._security_headers()
         self.end_headers()
-        login_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "login.html")
+        login_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "login.html")
         if os.path.exists(login_path):
             with open(login_path, "rb") as lf:
                 self.wfile.write(lf.read())
@@ -1098,7 +1098,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/login" or self.path == "/login.html":
-            login_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "login.html")
+            login_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "login.html")
             if os.path.exists(login_path):
                 with open(login_path, "rb") as lf:
                     content = lf.read()
@@ -1216,7 +1216,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": {"message": "Not found"}})
 
     def _serve_dashboard(self):
-        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard.html")
+        dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "dashboard.html")
         try:
             with open(dashboard_path, "rb") as f:
                 html = f.read()
