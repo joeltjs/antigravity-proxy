@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ## [2.3.0] - 2026-09-07
 
 ### Added
+- **Deterministic Context & Prompt Cache Optimization:** Automatic session ID derivation (`resolve_client_session_id`) using conversation seed hashing, enabling Google Antigravity to reuse prompt caches across turns and cutting token usage by up to 90%.
+- **Modular Core Architecture:** Refactored codebase into clean, maintainable sub-modules under `core/` and HTML views under `templates/`.
 - **Token Optimization Suite:**
   - **RTK (Reduced Tool Kit):** Automated truncation and compression for noisy shell, terminal, and build tool responses, saving ~30% - 50% input context.
   - **Caveman Mode:** Zero-slop prose compression engine that forces direct, polite-free technical answers, saving ~40% - 60% completion tokens.
