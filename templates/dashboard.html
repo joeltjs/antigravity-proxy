@@ -11,6 +11,13 @@
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,sans-serif;background-color:#0b0c10;background-image:linear-gradient(to right,rgba(255,255,255,0.03) 1px,transparent 1px),linear-gradient(to bottom,rgba(255,255,255,0.03) 1px,transparent 1px);background-size:24px 24px;background-attachment:fixed;color:#e2e8f0;min-height:100vh;padding:24px 16px}
   .wrap{max-width:1200px;margin:0 auto}
   .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px;background:rgba(18,20,29,0.75);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08);padding:16px 20px;border-radius:14px;box-shadow:0 4px 20px rgba(0,0,0,0.3)}
+  .header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  @media(max-width:768px){
+    .header{flex-direction:column;align-items:flex-start}
+    .header-actions{width:100%;display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+    .header-actions button{justify-content:center;width:100%}
+    .header-actions button:last-child{grid-column:span 2}
+  }
   .header h1{font-size:20px;font-weight:700;letter-spacing:-0.3px;color:#ffffff}
   .header h1 span.header-title-main{color:#38bdf8;font-weight:800}
   .header .tag{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.3px}
@@ -117,7 +124,7 @@
 
   <div class="header">
     <h1><span class="header-title-main">Antigravity</span> Proxy <span class="tag tag-roundrobin" id="strategy-tag">round-robin</span></h1>
-    <div style="display:flex;gap:8px">
+    <div class="header-actions">
       <button class="btn btn-ghost btn-sm" onclick="importFrom9router()" title="Import accounts from local 9router SQLite database">Import 9router</button>
       <button class="btn btn-ghost btn-sm" onclick="showAllModels()" title="List all upstream models per pool">Models</button>
       <button class="btn btn-ghost btn-sm" id="strategy-btn" onclick="toggleStrategy()" title="Click to change routing mode">Change Mode</button>
@@ -240,7 +247,7 @@
   <!-- Optimizer Plugins Section -->
   <div class="card">
     <div class="card-title">
-      <div><span class="title-accent">Optimization</span> <span class="title-txt">Plugins & Token Savers</span></div>
+      <div><span class="title-accent">Optimizer</span> <span class="title-txt">Plugins</span></div>
       <button class="btn btn-ghost btn-sm" onclick="showOptimizerComparison()">Comparison & Examples</button>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
@@ -261,11 +268,11 @@
       <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between;padding:16px;background:rgba(12,14,22,0.85);border:1px solid rgba(255,255,255,0.06);border-radius:12px">
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-            <span style="font-weight:700;color:#f8fafc;font-size:14px">Caveman (Zero-Slop)</span>
+            <span style="font-weight:700;color:#f8fafc;font-size:14px">Caveman (Direct Prose)</span>
             <span id="opt-badge-caveman" class="badge b-off">OFF</span>
           </div>
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
-            Eliminates polite AI filler phrases, conversational chatter, and preambles. Direct technical answers only.
+            Cuts conversational padding, preamble statements, and repetitive formalities. Delivers direct answers.
           </p>
           <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:14px">Estimated Savings: ~40% - 60% Output Tokens</div>
         </div>
@@ -926,15 +933,17 @@ function renderApiKeysTable() {
   tbody.innerHTML = allApiKeys.map((k) => {
     const createdStr = k.created ? new Date(k.created * 1000).toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) : '-';
     return `
-      <tr style="border-bottom:1px solid #1e1e26;transition:background .2s" onmouseover="this.style.background='#161922'" onmouseout="this.style.background='transparent'">
-        <td style="padding:10px 6px;font-weight:600;color:#e4e4e7">${esc(k.name || 'API Key')}</td>
-        <td style="padding:10px 6px;font-family:var(--mono);color:#4ade80">
-          <span style="background:rgba(74,222,128,0.1);padding:3px 8px;border-radius:4px;border:1px solid rgba(74,222,128,0.2)">${esc(k.key)}</span>
-          <button onclick="copyKeyStr('${esc(k.key)}')" style="margin-left:6px;padding:3px 8px;font-size:10px;background:#27272a;color:#cbd5e1;border:1px solid #3f3f46;border-radius:4px;cursor:pointer">Copy</button>
+      <tr style="border-bottom:1px solid rgba(255,255,255,0.06);transition:background .2s" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
+        <td style="padding:10px 8px;font-weight:600;color:#f1f5f9;white-space:nowrap">${esc(k.name || 'API Key')}</td>
+        <td style="padding:10px 8px;font-family:'SF Mono',Consolas,monospace;color:#4ade80">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span style="background:rgba(74,222,128,0.1);padding:3px 8px;border-radius:4px;border:1px solid rgba(74,222,128,0.2);word-break:break-all">${esc(k.key)}</span>
+            <button id="copy-btn-${idx}" onclick="copyKeyBtn(this, '${esc(k.key)}')" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px">Copy</button>
+          </div>
         </td>
-        <td style="padding:10px 6px;color:#71717a">${createdStr}</td>
-        <td style="padding:10px 6px;text-align:right">
-          <button onclick="deleteApiKey('${esc(k.id)}', '${esc(k.key)}', '${esc(k.name)}')" style="padding:3px 10px;font-size:11px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);border-radius:4px;cursor:pointer">Delete</button>
+        <td style="padding:10px 8px;color:#94a3b8;font-size:11px;white-space:nowrap">${createdStr}</td>
+        <td style="padding:10px 8px;text-align:right;white-space:nowrap">
+          <button onclick="deleteApiKey('${esc(k.id)}', '${esc(k.key)}', '${esc(k.name)}')" class="btn btn-danger btn-sm" style="padding:3px 10px;font-size:11px">Delete</button>
         </td>
       </tr>
     `;
@@ -998,8 +1007,17 @@ async function deleteApiKey(id, key, name) {
   }
 }
 
-function copyKeyStr(str) {
-  navigator.clipboard.writeText(str).then(() => showToast('API key copied!')).catch(() => {});
+function copyKeyBtn(btn, str) {
+  navigator.clipboard.writeText(str).then(() => {
+    btn.textContent = 'Copied!';
+    btn.style.color = '#4ade80';
+    btn.style.borderColor = 'rgba(74,222,128,0.4)';
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.style.color = '';
+      btn.style.borderColor = '';
+    }, 2000);
+  }).catch(() => {});
 }
 
 function fillEndpoint(){
