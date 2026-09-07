@@ -104,6 +104,14 @@ with open(CONFIG_PATH) as f:
 
 PORT = CONFIG.get("port", 20130)
 HOST = CONFIG.get("host", "0.0.0.0")
+
+# Optimization plugins configuration
+OPTIMIZERS = CONFIG.get("optimizers", {
+    "rtk": False,       # Reduced Tool Kit (Shell & command output compressor)
+    "caveman": False,   # Zero-slop direct prose compression
+    "ponytail": False   # Targeted code diff & minimal edits mode
+})
+CONFIG["optimizers"] = OPTIMIZERS
 # API keys for /v1/* endpoints (multiple keys supported: config.json or environment)
 def _load_api_keys():
     keys = []
@@ -683,6 +691,20 @@ DEFAULT_THOUGHT_SIGNATURE = (
 )
 
 
+def _compress_rtk(text):
+    """RTK: Trim noisy terminal and build output to preserve input tokens."""
+    if not text or not isinstance(text, str) or len(text) < 300:
+        return text
+    lines = text.splitlines()
+    if len(lines) <= 25:
+        return text
+    # Keep header context and recent execution tail, compress verbose middle
+    head = lines[:10]
+    tail = lines[-10:]
+    omitted = len(lines) - 20
+    return "\n".join(head) + f"\n\n[... RTK: {omitted} lines of noisy build/shell output truncated ...]\n\n" + "\n".join(tail)
+
+
 def openai_to_antigravity(body):
     messages = body.get("messages", [])
     model = body.get("model", "gemini-3-flash")
@@ -724,6 +746,8 @@ def openai_to_antigravity(body):
         if role == "tool":
             tool_call_id = msg.get("tool_call_id", "")
             content_str = content if isinstance(content, str) else json.dumps(content)
+            if OPTIMIZERS.get("rtk"):
+                content_str = _compress_rtk(content_str)
             resolved_name = tool_id_to_name.get(tool_call_id, "tool")
             contents.append({
                 "role": "user",
@@ -785,6 +809,28 @@ def openai_to_antigravity(body):
         if parts:
             contents.append({"role": ag_role, "parts": parts})
     # Gemini requires strict user/model alternation — merge adjacent same-role entries
+    # Optimizer directive injections (Caveman & Ponytail)
+    injected_instructions = []
+    if OPTIMIZERS.get("caveman"):
+        injected_instructions.append(
+            "[OPTIMIZER: CAVEMAN MODE ACTIVE]\n"
+            "Be extremely direct and succinct. Omit polite pleasantries, filler phrases, and repetitive conversational fluff. "
+            "Get straight to the answer or technical solution."
+        )
+    if OPTIMIZERS.get("ponytail"):
+        injected_instructions.append(
+            "[OPTIMIZER: PONYTAIL MODE ACTIVE]\n"
+            "When modifying code, write minimal targeted diffs or surgical snippets instead of rewriting entire files. "
+            "Never reproduce unchanged lines or redundant boilerplate."
+        )
+
+    if injected_instructions:
+        opt_prompt = "\n\n".join(injected_instructions)
+        if system_instruction:
+            system_instruction["parts"][0]["text"] += "\n\n" + opt_prompt
+        else:
+            system_instruction = {"parts": [{"text": opt_prompt}]}
+
     merged = []
     for c in contents:
         if merged and merged[-1]["role"] == c["role"]:
@@ -1079,7 +1125,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         if self.path == "/v1/accounts":
             if not self._check_auth(): return
-            self._send_json(200, {"accounts": [a.status() for a in ACCOUNT_STATES], "strategy": STRATEGY})
+            self._send_json(200, {
+                "accounts": [a.status() for a in ACCOUNT_STATES],
+                "strategy": STRATEGY,
+                "optimizers": OPTIMIZERS
+            })
             return
 
         if self.path == "/v1/quota":
@@ -1134,6 +1184,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
         """PUT /v1/strategy — switch between round-robin and sticky."""
         global STRATEGY
         if not self._check_auth(): return
+        if self.path == "/v1/optimizers/toggle":
+            body_raw, err = self._read_body(4096)
+            if err or not body_raw:
+                self._send_json(400, {"error": {"message": err or "Empty body"}})
+                return
+            try:
+                req = json.loads(body_raw.decode("utf-8"))
+                opt_name = req.get("optimizer", "").strip().lower()
+            except Exception:
+                self._send_json(400, {"error": {"message": "Invalid JSON"}})
+                return
+            if opt_name not in OPTIMIZERS:
+                self._send_json(400, {"error": {"message": f"Unknown optimizer: {opt_name}"}})
+                return
+            OPTIMIZERS[opt_name] = not OPTIMIZERS[opt_name]
+            CONFIG["optimizers"] = OPTIMIZERS
+            try:
+                with open(CONFIG_PATH, "w") as f:
+                    json.dump(CONFIG, f, indent=2)
+            except Exception as e:
+                print(f"  [WARN] Save optimizers config: {e}")
+            print(f"[CONFIG] Optimizer {opt_name} toggled to: {OPTIMIZERS[opt_name]}")
+            self._send_json(200, {"ok": True, "optimizers": OPTIMIZERS})
+            return
+
         if self.path == "/v1/strategy":
             body_raw, err = self._read_body(4096)
             if err:

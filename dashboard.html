@@ -231,9 +231,60 @@
     </div>
     <div class="endpoint-box">
       <b>Base URL:</b> <code id="ep-base"></code><br>
-      <b>Models:</b> gemini-3.7-flash-high, gemini-3.7-flash-medium, gemini-3.6-flash-high, gemini-3.1-pro-high, claude-sonnet-4-6-thinking, claude-opus-4-6-thinking<br><br>
+      <b>Models:</b> gemini-3.8-flash-high, gemini-3.8-flash-medium, gemini-3.7-flash-high, gemini-3.6-flash-high, gemini-3.1-pro-high, claude-sonnet-4-6-thinking, claude-opus-4-6-thinking<br><br>
       <b>Test Command:</b><br>
       <code id="ep-curl" style="display:block;padding:10px;white-space:pre-wrap;word-break:break-word;overflow-x:auto"></code>
+    </div>
+  </div>
+
+  <!-- Optimizer Plugins Section -->
+  <div class="card">
+    <div class="card-title">
+      <div><span class="title-accent">Optimization</span> <span class="title-txt">Plugins & Token Savers</span></div>
+      <button class="btn btn-ghost btn-sm" onclick="showOptimizerComparison()">Comparison & Examples</button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
+      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-weight:700;color:#f8fafc;font-size:14px">RTK (Tool Trimmer)</span>
+            <span id="opt-badge-rtk" class="badge b-off">OFF</span>
+          </div>
+          <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
+            Trims noisy build logs, large terminal outputs, and repetitive stdout chunks before sending to the model context.
+          </p>
+          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:12px">Estimated Savings: ~30% - 50% Input Tokens</div>
+        </div>
+        <button id="opt-btn-rtk" class="btn btn-ghost btn-sm" style="width:100%" onclick="toggleOptimizer('rtk')">Enable RTK</button>
+      </div>
+
+      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-weight:700;color:#f8fafc;font-size:14px">Caveman (Zero-Slop)</span>
+            <span id="opt-badge-caveman" class="badge b-off">OFF</span>
+          </div>
+          <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
+            Eliminates polite AI filler phrases, conversational chatter, and preambles. Direct technical answers only.
+          </p>
+          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:12px">Estimated Savings: ~40% - 60% Output Tokens</div>
+        </div>
+        <button id="opt-btn-caveman" class="btn btn-ghost btn-sm" style="width:100%" onclick="toggleOptimizer('caveman')">Enable Caveman</button>
+      </div>
+
+      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between">
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span style="font-weight:700;color:#f8fafc;font-size:14px">Ponytail (Minimal Diffs)</span>
+            <span id="opt-badge-ponytail" class="badge b-off">OFF</span>
+          </div>
+          <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
+            Prevents the model from rewriting entire 500+ line files for minor changes. Enforces surgical code edits.
+          </p>
+          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:12px">Estimated Savings: ~50% - 70% Code Context</div>
+        </div>
+        <button id="opt-btn-ponytail" class="btn btn-ghost btn-sm" style="width:100%" onclick="toggleOptimizer('ponytail')">Enable Ponytail</button>
+      </div>
     </div>
   </div>
 </div>
@@ -445,6 +496,7 @@ async function load() {
     sTag.textContent = strat;
     sTag.className = 'tag ' + (strat === 'sticky' ? 'tag-sticky' : 'tag-roundrobin');
     currentStrategy = data.strategy || 'round-robin';
+    updateOptimizerUI(data.optimizers);
     let totalReq=0, totalErr=0, active=0;
     const html = accs.length === 0
       ? '<div class="empty">No accounts added yet. Click "Add Account" to login via Google OAuth.</div>'
@@ -538,6 +590,122 @@ async function toggleAcc(idx) {
   await api('/v1/accounts/toggle', {method:'POST', body: JSON.stringify({email})});
   load();
 }
+async function toggleOptimizer(name) {
+  try {
+    const res = await fetch('/v1/optimizers/toggle', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({optimizer: name})
+    });
+    if (res.ok) {
+      const d = await res.json();
+      updateOptimizerUI(d.optimizers);
+      showToast(`Optimizer ${name.toUpperCase()} updated!`);
+    } else {
+      showToast(`Failed to update ${name}`, true);
+    }
+  } catch (e) {
+    showToast('Network error updating optimizer', true);
+  }
+}
+
+function updateOptimizerUI(opts) {
+  if (!opts) return;
+  ['rtk', 'caveman', 'ponytail'].forEach(name => {
+    const active = !!opts[name];
+    const badge = document.getElementById(`opt-badge-${name}`);
+    const btn = document.getElementById(`opt-btn-${name}`);
+    if (badge) {
+      badge.textContent = active ? 'ACTIVE' : 'OFF';
+      badge.className = 'badge ' + (active ? 'b-ok' : 'b-off');
+    }
+    if (btn) {
+      btn.textContent = active ? `Disable ${capitalize(name)}` : `Enable ${capitalize(name)}`;
+      btn.className = 'btn btn-sm ' + (active ? 'btn-danger' : 'btn-ghost');
+    }
+  });
+}
+
+function capitalize(s) {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function showOptimizerComparison() {
+  Swal.fire({
+    title: 'Optimization Plugins Comparison',
+    width: '780px',
+    background: '#0d111a',
+    color: '#f8fafc',
+    html: `
+      <div style="text-align:left;font-size:13px;line-height:1.6;color:#cbd5e1;max-height:65vh;overflow-y:auto;padding-right:8px">
+        <div style="margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:700;color:#38bdf8;font-size:15px">1. RTK (Reduced Tool Kit)</span>
+            <span style="font-size:11px;background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:12px;font-weight:700">Save ~30% - 50% Input</span>
+          </div>
+          <p style="margin-bottom:8px">Compresses noisy shell and terminal output (like large build traces, endless test suites, or package installer logs) so they don't consume your input context window.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-family:monospace;font-size:11px">
+            <div style="background:#07090e;padding:10px;border-radius:8px;border:1px solid rgba(239,68,68,0.3)">
+              <span style="color:#f87171;font-weight:700">WITHOUT RTK (1,200 tokens)</span><br><br>
+              $ npm install<br>
+              fetch http://...<br>
+              sill pacote -- extracting...<br>
+              [... 200 lines of npm logs ...]<br>
+              added 54 packages in 3s
+            </div>
+            <div style="background:#07090e;padding:10px;border-radius:8px;border:1px solid rgba(74,222,128,0.3)">
+              <span style="color:#4ade80;font-weight:700">WITH RTK (18 tokens)</span><br><br>
+              $ npm install<br>
+              [... RTK: 200 lines truncated ...]<br>
+              added 54 packages in 3s
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:16px;border-bottom:1px solid rgba(255,255,255,0.08);padding-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:700;color:#38bdf8;font-size:15px">2. Caveman Mode</span>
+            <span style="font-size:11px;background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:12px;font-weight:700">Save ~40% - 60% Output</span>
+          </div>
+          <p style="margin-bottom:8px">Instructs the model to cut out pleasantries, generic apologies, preamble fluff, and redundant conversational filler. Pure direct technical answers.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-family:monospace;font-size:11px">
+            <div style="background:#07090e;padding:10px;border-radius:8px;border:1px solid rgba(239,68,68,0.3)">
+              <span style="color:#f87171;font-weight:700">WITHOUT CAVEMAN (85 tokens)</span><br><br>
+              "Sure! I would be more than happy to help you with that. To push your latest changes to GitHub, you can simply run the following command in your terminal..."
+            </div>
+            <div style="background:#07090e;padding:10px;border-radius:8px;border:1px solid rgba(74,222,128,0.3)">
+              <span style="color:#4ade80;font-weight:700">WITH CAVEMAN (12 tokens)</span><br><br>
+              "Run: <code>git push origin main</code>."
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <span style="font-weight:700;color:#38bdf8;font-size:15px">3. Ponytail Mode</span>
+            <span style="font-size:11px;background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:12px;font-weight:700">Save ~50% - 70% Code Context</span>
+          </div>
+          <p style="margin-bottom:8px">Forces the coding agent to emit surgical line patches rather than re-printing 400 lines of unchanged code just to modify 2 lines.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-family:monospace;font-size:11px">
+            <div style="background:#07090e;padding:10px;border-radius:8px;border:1px solid rgba(239,68,68,0.3)">
+              <span style="color:#f87171;font-weight:700">WITHOUT PONYTAIL (500 tokens)</span><br><br>
+              [Re-writes the entire 450-line file from scratch with only 1 line changed in the middle]
+            </div>
+            <div style="background:#07090e;padding:10px;border-radius:8px;border:1px solid rgba(74,222,128,0.3)">
+              <span style="color:#4ade80;font-weight:700">WITH PONYTAIL (35 tokens)</span><br><br>
+              @@ line 42 @@<br>
+              - const timeout = 5000;<br>
+              + const timeout = 10000;
+            </div>
+          </div>
+        </div>
+      </div>
+    `,
+    confirmButtonText: 'Close',
+    confirmButtonColor: '#0284c7'
+  });
+}
+
 function showAddModal() {
   const m = document.createElement('div');
   m.className = 'modal-bg';

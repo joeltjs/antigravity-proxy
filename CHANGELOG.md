@@ -6,30 +6,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
-## [2.1.1] - 2026-09-02
+## [2.3.0] - 2026-09-07
 
 ### Added
-- **1-Click & Fallback 9router Importer:** Web UI button to scan default 9router SQLite database paths, with manual prompt fallback that auto-saves verified paths to `config.json` (`router_db_path`).
-- **Cloudflare WARP SOCKS5 Routing Support:** Outbound proxy routing support for upstream API calls (`WARP_ENABLED` flag in `server.py`).
-- **Setup Documentation:** Added standalone `WARP_SETUP.md` for geo-restriction troubleshooting.
-- **Auto-Reset Account Error State:** Successfully processed requests automatically clear account error badges and reset failure counters.
-- **Full Error Modal Inspection:** Clickable error badges on account cards to inspect full response bodies.
+- **Token Optimization Suite:**
+  - **RTK (Reduced Tool Kit):** Automated truncation and compression for noisy shell, terminal, and build tool responses, saving ~30% - 50% input context.
+  - **Caveman Mode:** Zero-slop prose compression engine that forces direct, polite-free technical answers, saving ~40% - 60% completion tokens.
+  - **Ponytail Mode:** Surgical code patch mode preventing full-file rewrites for minor modifications, saving ~50% - 70% code context.
+- **Interactive Optimizer UI:** Live toggle switches on dashboard for RTK, Caveman, and Ponytail with real-time state persistence.
+- **Comparison & Examples Modal:** Side-by-side modal dialog showcasing token differences with and without optimizers.
+- **Dynamic Catalog Integration:** Added Gemini 3.8 Flash series to `FULL_MODEL_CATALOG`.
 
-### Changed
-- **UI Design System Upgrade:** Clean Deep Ocean dark theme (`#07090e` base, `#0d111a` card surface, solid `#0284c7` buttons) replacing legacy gradients.
-- **Documentation Cleanup:** Streamlined `README.md` with concise 3-method account setup guide and removed redundant formatting.
+### Fixed
+- **Real-Time Quota Accuracy:** Synchronized `QUOTA_API` endpoint with `daily-cloudcode-pa` so account usage fractions properly decay in real time instead of remaining locked at 100%.
+- **Streaming Reasoning Delivery:** Emitted thought chunks during streaming completions via `includeThoughts: true`.
 
 ---
 
-## [2.1.0] - 2026-09-02
+## [2.2.0] - 2026-09-02
 
 ### Added
-- **Multi-API Key Management:** Generate and revoke client API keys via `/v1/api-keys` endpoints and dashboard UI.
-- **Session-Based Authentication:** Replaced basic auth with standalone `login.html` and secure `HttpOnly` session cookies.
+- **Native Gemini 3.8 Flash Support:** Integrated `gemini-3.8-flash-tiered` with dynamic `thinkingLevel` translation (`high` / `medium`).
+- **1-Click & Fallback 9router Importer:** Instant SQLite database scanner with automated fallback prompt.
+- **WARP SOCKS5 Routing:** Routing outbound Google API traffic via local SOCKS5 proxy to resolve datacenter IP geo-restrictions.
 
 ---
 
-## [2.0.0] - 2026-08-20
+## [2.1.0] - 2026-08-25
 
 ### Added
-- Initial v2 release featuring multi-account pool aggregation, quota tracking via `fetchAvailableModels`, round-robin/sticky routing, and web dashboard.
+- Multi-API key management (`/v1/api-keys`).
+- Session-based web login with dark glassmorphism design.

@@ -1,100 +1,21 @@
-# Antigravity Multi-Account Proxy v2.2.0
+# Antigravity Multi-Account Proxy v2.3.0
 
-![Version](https://img.shields.io/badge/version-2.2.0-0284c7)
+![Version](https://img.shields.io/badge/version-2.3.0-0284c7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity accounts into a single load-balanced endpoint with automatic rate-limit failover, quota tracking, session authentication, and multi-API key support.
+OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity accounts into a single load-balanced endpoint with automatic rate-limit failover, quota tracking, session authentication, multi-API key support, and built-in token optimization plugins.
 
 ---
 
-## What's New in v2.2.0
+## What's New in v2.3.0
 
-- **Gemini 3.8 Flash Native Support:** Native integration for `gemini-3.8-flash-tiered` with dynamic `thinkingLevel` (`high`, `medium`).
-- **1-Click & Fallback 9router Importer:** Instant SQLite database detection with automated fallback prompt for custom database paths.
-- **Cloudflare WARP SOCKS5 Routing:** Built-in proxy routing for `*.googleapis.com` to bypass datacenter IP restrictions.
-- **Auto-Reset Account Error State:** Successful requests automatically clear error badges and reset failure counters.
-- **UI Design System Upgrade:** Modern Deep Ocean theme with Electric Cyan headers and distinct routing mode badges.
-
----
-
-## Features
-
-- Multi-Account Aggregation: Pool multiple Google AI accounts into a single unified endpoint.
-- Auto-Failover on Rate Limits (429): Applies a 5-minute cooldown and seamlessly reroutes to available accounts.
-- Multiple API Keys Management: Generate and revoke client API keys (/v1/api-keys) directly via dashboard.
-- Secure Web Dashboard: Real-time quota metrics, usage counters, and account controls protected by session authentication.
-- WARP SOCKS5 Routing: Built-in support to route upstream API calls through local proxy when datacenter IPs are restricted.
-
----
-
-## Account Setup & Import Methods
-
-There are 3 standard ways to add accounts:
-
-### Method 1: Import from 9router (Automatic or Manual)
-
-- Automatic Scan:
-  Click "Import 9router" in the web dashboard navigation bar. The server automatically scans default SQLite database locations:
-  - `~/.9router/db/data.sqlite` (Native install)
-  - `/app/data/db/data.sqlite` (Docker container)
-
-- Manual Input (If default locations are not found):
-  If the automatic scan cannot find the database, a path input prompt will appear. You can find your database location in 9router web interface:
-  1. Open 9router web dashboard and click the Settings menu.
-  2. In the Local Mode section at the top, copy the database path shown (e.g. `/path/to/data.sqlite`).
-  3. Paste the path into the input prompt, or set `"router_db_path": "/path/to/data.sqlite"` directly in `config.json`. Once verified, the path is saved automatically for future scans.
-
-### Method 2: OAuth 2.0 Web Authorization
-
-Authenticate accounts directly via your browser:
-1. Open the dashboard at `http://localhost:20130/`.
-2. Click "Add Account via OAuth".
-3. Sign in with your Google account and grant permissions.
-
-### Method 3: Manual Refresh Token Entry
-
-You can add refresh tokens directly via Web UI or configuration file:
-
-- **Via Dashboard UI:**  
-  Click "Add Account" in the web dashboard navigation bar, enter your Google account email and paste the refresh token (`1//0g...`).
-
-- **Via `config.json`:**  
-  Add account entries directly to the `accounts` array:
-  ```json
-  {
-    "accounts": [
-      {
-        "email": "user@example.com",
-        "refresh_token": "1//0g..."
-      }
-    ]
-  }
-  ```
-
----
-
-## Quick Start
-
-### 1. Installation
-```bash
-git clone https://github.com/joeltjs/antigravity-proxy-v2.git
-cd antigravity-proxy-v2
-pip install -r requirements.txt
-```
-
-### 2. Configuration
-Copy sample configuration:
-```bash
-cp config.example.json config.json
-cp .env.example .env
-```
-Fill in your OAuth credentials and dashboard password in `.env`.
-
-### 3. Run Server
-```bash
-python3 server.py
-```
-Or run as a systemd background service.
+- **Built-in Token Optimization Plugins:**
+  - **RTK (Reduced Tool Kit):** Shell & terminal output trimmer that cuts out verbose build traces, package installation logs, and noisy traceback middles (Save ~30% - 50% input tokens).
+  - **Caveman Mode:** Zero-slop prose compressor that eliminates AI pleasantries, conversational fluff, and generic greetings in favor of direct technical answers (Save ~40% - 60% output tokens).
+  - **Ponytail Mode:** Surgical code diff mode that prevents models from rewriting entire 400+ line files for minor 2-line edits (Save ~50% - 70% code context).
+- **Interactive Optimizer Controls:** Toggle plugins on the fly directly from the Web Dashboard or config file, complete with side-by-side token saving comparisons.
+- **Accurate Real-Time Quota Tracking:** Fixed quota endpoint synchronization with `daily-cloudcode-pa` to accurately reflect account usage fractions in real time.
+- **Streaming Reasoning Content:** Native support for streaming thinking chunks (`includeThoughts: true`) in OpenAI-compatible format.
 
 ---
 
@@ -112,11 +33,48 @@ Or run as a systemd background service.
 
 ---
 
-## Troubleshooting & Geo-restriction
+## Optimization Plugins
 
-### `HTTP 400: User location is not supported for the API use`
-This error occurs when the server IP region is restricted by the upstream API.
-Follow the setup guide: [WARP_SETUP.md](WARP_SETUP.md)
+Control plugins dynamically via dashboard or `config.json`:
+```json
+{
+  "optimizers": {
+    "rtk": true,
+    "caveman": false,
+    "ponytail": true
+  }
+}
+```
+
+### 1. RTK (Reduced Tool Kit)
+- **Problem:** Terminal outputs from `npm install`, `cargo build`, or test suites often dump thousands of lines into the conversation context.
+- **Solution:** RTK retains the initial command context and the recent exit tail while compressing the noisy middle, reducing 1,000+ tokens to under 20 tokens.
+
+### 2. Caveman Mode
+- **Problem:** LLMs often add unnecessary conversational padding ("I would be delighted to assist you with your request...").
+- **Solution:** Enforces direct, high-density technical answers, drastically saving completion token spend and accelerating stream generation.
+
+### 3. Ponytail Mode
+- **Problem:** Coding assistants frequently rewrite an entire 500-line file when only modifying a single variable or function call.
+- **Solution:** Enforces targeted diffs and surgical patches, preserving context space for larger multi-file coding sessions.
+
+---
+
+## Account Setup & Import Methods
+
+There are 3 standard ways to add accounts:
+
+### Method 1: Import from 9router (Automatic or Manual)
+- Automatic Scan:
+  Click "Import 9router" in the web dashboard navigation bar. The server automatically scans default SQLite database locations (`~/.9router/db/data.sqlite` or `/app/data/db/data.sqlite`).
+- Manual Input:
+  If custom database paths are used, copy your SQLite path from 9router Settings > Local Mode and paste it into the prompt. The path is saved automatically.
+
+### Method 2: OAuth 2.0 Web Authorization
+Authenticate accounts directly via your browser by clicking "Add Account via OAuth" in the web UI.
+
+### Method 3: Manual Refresh Token Entry
+Add refresh tokens directly via the "Add Account" modal in the dashboard or append them to the `accounts` array in `config.json`.
 
 ---
 
