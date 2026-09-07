@@ -215,14 +215,14 @@
     </div>
     <p style="font-size:12px;color:#94a3b8;margin-bottom:12px">Manage individual API keys for client access (e.g. Kilo Code, Claude Code, OpenCode). All keys can access the <code>/v1/*</code> endpoints.</p>
     
-    <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;font-size:12px;text-align:left">
+    <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px">
+      <table style="width:100%;min-width:640px;border-collapse:collapse;font-size:12px;text-align:left">
         <thead>
           <tr style="border-bottom:1px solid rgba(255,255,255,0.08);color:#94a3b8;font-size:11px;text-transform:uppercase;letter-spacing:.4px">
-            <th style="padding:8px 6px">Name</th>
-            <th style="padding:8px 6px">API Key</th>
-            <th style="padding:8px 6px">Created</th>
-            <th style="padding:8px 6px;text-align:right">Action</th>
+            <th style="padding:8px 10px;white-space:nowrap">Name</th>
+            <th style="padding:8px 10px;white-space:nowrap">API Key</th>
+            <th style="padding:8px 10px;white-space:nowrap">Created</th>
+            <th style="padding:8px 10px;text-align:right;white-space:nowrap">Action</th>
           </tr>
         </thead>
         <tbody id="api-keys-table">
@@ -934,15 +934,15 @@ function renderApiKeysTable() {
     const createdStr = k.created ? new Date(k.created * 1000).toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) : '-';
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.06);transition:background .2s" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
-        <td style="padding:10px 8px;font-weight:600;color:#f1f5f9;white-space:nowrap">${esc(k.name || 'API Key')}</td>
-        <td style="padding:10px 8px;font-family:'SF Mono',Consolas,monospace;color:#4ade80">
+        <td style="padding:10px 10px;font-weight:600;color:#f1f5f9;white-space:nowrap">${esc(k.name || 'API Key')}</td>
+        <td style="padding:10px 10px;font-family:'SF Mono',Consolas,monospace;color:#4ade80">
           <div style="display:inline-flex;align-items:center;gap:8px">
-            <span style="background:rgba(74,222,128,0.1);padding:4px 8px;border-radius:4px;border:1px solid rgba(74,222,128,0.2);word-break:break-all">${esc(k.key)}</span>
+            <span style="background:rgba(74,222,128,0.1);padding:4px 10px;border-radius:6px;border:1px solid rgba(74,222,128,0.2);white-space:nowrap">${esc(k.key)}</span>
             <button id="copy-btn-${idx}" onclick="copyKeyBtn(this, '${esc(k.key)}')" class="btn btn-ghost btn-sm" style="padding:3px 10px;font-size:11px;flex-shrink:0">Copy</button>
           </div>
         </td>
-        <td style="padding:10px 8px;color:#94a3b8;font-size:11px;white-space:nowrap">${createdStr}</td>
-        <td style="padding:10px 8px;text-align:right;white-space:nowrap">
+        <td style="padding:10px 10px;color:#94a3b8;font-size:11px;white-space:nowrap">${createdStr}</td>
+        <td style="padding:10px 10px;text-align:right;white-space:nowrap">
           <button onclick="deleteApiKey('${esc(k.id)}', '${esc(k.key)}', '${esc(k.name)}')" class="btn btn-danger btn-sm" style="padding:3px 10px;font-size:11px">Delete</button>
         </td>
       </tr>
@@ -1012,12 +1012,15 @@ function copyKeyBtn(btn, str) {
     btn.textContent = 'Copied!';
     btn.style.color = '#4ade80';
     btn.style.borderColor = 'rgba(74,222,128,0.4)';
+    showToast('API Key copied to clipboard!');
     setTimeout(() => {
       btn.textContent = 'Copy';
       btn.style.color = '';
       btn.style.borderColor = '';
     }, 2000);
-  }).catch(() => {});
+  }).catch(() => {
+    showToast('Failed to copy', true);
+  });
 }
 
 function fillEndpoint(){
