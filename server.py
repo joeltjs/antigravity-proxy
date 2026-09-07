@@ -19,6 +19,7 @@ import time
 import threading
 import socks
 import socket
+from core.optimizers import resolve_client_session_id
 
 _orig_create_connection = socket.create_connection
 
@@ -1627,6 +1628,10 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if not account:
                 self._send_json(503, {"error": {"message": "No active accounts"}})
                 return
+
+            # Inject deterministic session ID into Antigravity request for prompt cache hit
+            stable_session_id = resolve_client_session_id(body, account.email)
+            ag_body["request"]["sessionId"] = stable_session_id
             try:
                 token = account.get_token()
                 account.request_count += 1
