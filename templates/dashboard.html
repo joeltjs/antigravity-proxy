@@ -1008,19 +1008,39 @@ async function deleteApiKey(id, key, name) {
 }
 
 function copyKeyBtn(btn, str) {
-  navigator.clipboard.writeText(str).then(() => {
+  function onSuccess() {
     btn.textContent = 'Copied!';
     btn.style.color = '#4ade80';
     btn.style.borderColor = 'rgba(74,222,128,0.4)';
-    showToast('API Key copied to clipboard!');
+    showToast('API key copied to clipboard!');
     setTimeout(() => {
       btn.textContent = 'Copy';
       btn.style.color = '';
       btn.style.borderColor = '';
     }, 2000);
-  }).catch(() => {
+  }
+
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(str).then(onSuccess).catch(() => fallbackCopy(str, onSuccess));
+  } else {
+    fallbackCopy(str, onSuccess);
+  }
+}
+
+function fallbackCopy(str, cb) {
+  try {
+    const el = document.createElement('textarea');
+    el.value = str;
+    el.style.position = 'fixed';
+    el.style.opacity = '0';
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    if (cb) cb();
+  } catch (err) {
     showToast('Failed to copy', true);
-  });
+  }
 }
 
 function fillEndpoint(){
