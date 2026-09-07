@@ -930,15 +930,15 @@ function renderApiKeysTable() {
     tbody.innerHTML = '<tr><td colspan="4" style="padding:12px 6px;color:#71717a">No API keys configured. Click "+ Create New Key" to create one.</td></tr>';
     return;
   }
-  tbody.innerHTML = allApiKeys.map((k) => {
+  tbody.innerHTML = allApiKeys.map((k, idx) => {
     const createdStr = k.created ? new Date(k.created * 1000).toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) : '-';
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.06);transition:background .2s" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
         <td style="padding:10px 8px;font-weight:600;color:#f1f5f9;white-space:nowrap">${esc(k.name || 'API Key')}</td>
         <td style="padding:10px 8px;font-family:'SF Mono',Consolas,monospace;color:#4ade80">
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-            <span style="background:rgba(74,222,128,0.1);padding:3px 8px;border-radius:4px;border:1px solid rgba(74,222,128,0.2);word-break:break-all">${esc(k.key)}</span>
-            <button id="copy-btn-${idx}" onclick="copyKeyBtn(this, '${esc(k.key)}')" class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px">Copy</button>
+          <div style="display:inline-flex;align-items:center;gap:8px">
+            <span style="background:rgba(74,222,128,0.1);padding:4px 8px;border-radius:4px;border:1px solid rgba(74,222,128,0.2);word-break:break-all">${esc(k.key)}</span>
+            <button id="copy-btn-${idx}" onclick="copyKeyBtn(this, '${esc(k.key)}')" class="btn btn-ghost btn-sm" style="padding:3px 10px;font-size:11px;flex-shrink:0">Copy</button>
           </div>
         </td>
         <td style="padding:10px 8px;color:#94a3b8;font-size:11px;white-space:nowrap">${createdStr}</td>
