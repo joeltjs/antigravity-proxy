@@ -153,7 +153,7 @@ ACCOUNTS = CONFIG["accounts"]
 STRATEGY = CONFIG.get("strategy", "round-robin")
 MAX_RETRIES = CONFIG.get("max_retries", 3)
 API_ENDPOINT = CONFIG["api_endpoint"]
-QUOTA_API = "https://cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
+QUOTA_API = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
 OAUTH_SCOPES = CONFIG.get("oauth_scopes",
     "https://www.googleapis.com/auth/cloud-platform "
     "https://www.googleapis.com/auth/userinfo.email "
