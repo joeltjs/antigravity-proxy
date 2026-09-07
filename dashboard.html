@@ -243,8 +243,8 @@
       <div><span class="title-accent">Optimization</span> <span class="title-txt">Plugins & Token Savers</span></div>
       <button class="btn btn-ghost btn-sm" onclick="showOptimizerComparison()">Comparison & Examples</button>
     </div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px">
-      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between;padding:16px;background:rgba(12,14,22,0.85);border:1px solid rgba(255,255,255,0.06);border-radius:12px">
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <span style="font-weight:700;color:#f8fafc;font-size:14px">RTK (Tool Trimmer)</span>
@@ -253,12 +253,12 @@
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
             Trims noisy build logs, large terminal outputs, and repetitive stdout chunks before sending to the model context.
           </p>
-          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:12px">Estimated Savings: ~30% - 50% Input Tokens</div>
+          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:14px">Estimated Savings: ~30% - 50% Input Tokens</div>
         </div>
-        <button id="opt-btn-rtk" class="btn btn-ghost btn-sm" style="width:100%" onclick="toggleOptimizer('rtk')">Enable RTK</button>
+        <button id="opt-btn-rtk" class="btn btn-ghost btn-sm" style="width:100%;font-weight:600" onclick="toggleOptimizer('rtk')">Enable RTK</button>
       </div>
 
-      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between">
+      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between;padding:16px;background:rgba(12,14,22,0.85);border:1px solid rgba(255,255,255,0.06);border-radius:12px">
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <span style="font-weight:700;color:#f8fafc;font-size:14px">Caveman (Zero-Slop)</span>
@@ -267,12 +267,12 @@
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
             Eliminates polite AI filler phrases, conversational chatter, and preambles. Direct technical answers only.
           </p>
-          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:12px">Estimated Savings: ~40% - 60% Output Tokens</div>
+          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:14px">Estimated Savings: ~40% - 60% Output Tokens</div>
         </div>
-        <button id="opt-btn-caveman" class="btn btn-ghost btn-sm" style="width:100%" onclick="toggleOptimizer('caveman')">Enable Caveman</button>
+        <button id="opt-btn-caveman" class="btn btn-ghost btn-sm" style="width:100%;font-weight:600" onclick="toggleOptimizer('caveman')">Enable Caveman</button>
       </div>
 
-      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between">
+      <div class="quota-item" style="display:flex;flex-direction:column;justify-content:space-between;padding:16px;background:rgba(12,14,22,0.85);border:1px solid rgba(255,255,255,0.06);border-radius:12px">
         <div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
             <span style="font-weight:700;color:#f8fafc;font-size:14px">Ponytail (Minimal Diffs)</span>
@@ -281,9 +281,9 @@
           <p style="font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:12px">
             Prevents the model from rewriting entire 500+ line files for minor changes. Enforces surgical code edits.
           </p>
-          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:12px">Estimated Savings: ~50% - 70% Code Context</div>
+          <div style="font-size:11px;color:#38bdf8;font-weight:600;margin-bottom:14px">Estimated Savings: ~50% - 70% Code Context</div>
         </div>
-        <button id="opt-btn-ponytail" class="btn btn-ghost btn-sm" style="width:100%" onclick="toggleOptimizer('ponytail')">Enable Ponytail</button>
+        <button id="opt-btn-ponytail" class="btn btn-ghost btn-sm" style="width:100%;font-weight:600" onclick="toggleOptimizer('ponytail')">Enable Ponytail</button>
       </div>
     </div>
   </div>
@@ -592,17 +592,15 @@ async function toggleAcc(idx) {
 }
 async function toggleOptimizer(name) {
   try {
-    const res = await fetch('/v1/optimizers/toggle', {
+    const res = await api('/v1/optimizers/toggle', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({optimizer: name})
     });
     if (res.ok) {
-      const d = await res.json();
-      updateOptimizerUI(d.optimizers);
+      updateOptimizerUI(res.optimizers);
       showToast(`Optimizer ${name.toUpperCase()} updated!`);
     } else {
-      showToast(`Failed to update ${name}`, true);
+      showToast(res.error || `Failed to update ${name}`, true);
     }
   } catch (e) {
     showToast('Network error updating optimizer', true);

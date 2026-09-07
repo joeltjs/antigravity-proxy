@@ -1184,30 +1184,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
         """PUT /v1/strategy — switch between round-robin and sticky."""
         global STRATEGY
         if not self._check_auth(): return
-        if self.path == "/v1/optimizers/toggle":
-            body_raw, err = self._read_body(4096)
-            if err or not body_raw:
-                self._send_json(400, {"error": {"message": err or "Empty body"}})
-                return
-            try:
-                req = json.loads(body_raw.decode("utf-8"))
-                opt_name = req.get("optimizer", "").strip().lower()
-            except Exception:
-                self._send_json(400, {"error": {"message": "Invalid JSON"}})
-                return
-            if opt_name not in OPTIMIZERS:
-                self._send_json(400, {"error": {"message": f"Unknown optimizer: {opt_name}"}})
-                return
-            OPTIMIZERS[opt_name] = not OPTIMIZERS[opt_name]
-            CONFIG["optimizers"] = OPTIMIZERS
-            try:
-                with open(CONFIG_PATH, "w") as f:
-                    json.dump(CONFIG, f, indent=2)
-            except Exception as e:
-                print(f"  [WARN] Save optimizers config: {e}")
-            print(f"[CONFIG] Optimizer {opt_name} toggled to: {OPTIMIZERS[opt_name]}")
-            self._send_json(200, {"ok": True, "optimizers": OPTIMIZERS})
-            return
+        if self.path == "/v1/optimizers/toggle" or self.path == "/api/optimizers/toggle":
+            # Handled via PUT
+            pass
 
         if self.path == "/v1/strategy":
             body_raw, err = self._read_body(4096)
@@ -1390,6 +1369,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
             return
 
         if not self._check_auth(): return
+
+        if self.path == "/v1/optimizers/toggle" or self.path == "/api/optimizers/toggle":
+            body_raw, err = self._read_body(4096)
+            if err or not body_raw:
+                self._send_json(400, {"error": {"message": err or "Empty body"}})
+                return
+            try:
+                req = json.loads(body_raw.decode("utf-8"))
+                opt_name = req.get("optimizer", "").strip().lower()
+            except Exception:
+                self._send_json(400, {"error": {"message": "Invalid JSON"}})
+                return
+            if opt_name not in OPTIMIZERS:
+                self._send_json(400, {"error": {"message": f"Unknown optimizer: {opt_name}"}})
+                return
+            OPTIMIZERS[opt_name] = not OPTIMIZERS[opt_name]
+            CONFIG["optimizers"] = OPTIMIZERS
+            try:
+                with open(CONFIG_PATH, "w") as f:
+                    json.dump(CONFIG, f, indent=2)
+            except Exception as e:
+                print(f"  [WARN] Save optimizers config: {e}")
+            print(f"[CONFIG] Optimizer {opt_name} toggled to: {OPTIMIZERS[opt_name]}")
+            self._send_json(200, {"ok": True, "optimizers": OPTIMIZERS})
+            return
 
         if self.path == "/api/import-9router":
             body_raw, _ = self._read_body(64 * 1024)
