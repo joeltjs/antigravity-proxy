@@ -6,11 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
-## [2.3.0] - 2026-09-07
+## [2.3.1] - 2026-09-07
 
 ### Added
+- **Per-Request Optimizer Override:** Supported overriding global optimizer states per request via payload parameter (`{"optimizers": {"caveman": false}}`) or custom HTTP header (`X-Optimizer-Caveman: false`).
 - **Prompt Cache Optimization:** Improved optimizer and increased cache hit rate using conversation seed hashing.
 - **Modular Core Architecture:** Refactored codebase into clean, maintainable sub-modules under `core/` and HTML views under `templates/`.
+- **Responsive Mobile Dashboard:** Enhanced mobile layout with horizontal scrolling API key tables, touch scroll physics, and visual `Copied!` micro-interactions.
+
+---
+
+## [2.3.0] - 2026-09-07
 - **Token Optimization Suite:**
   - **RTK (Reduced Tool Kit):** Automated truncation and compression for noisy shell, terminal, and build tool responses, saving ~30% - 50% input context.
   - **Caveman Mode:** Zero-slop prose compression engine that forces direct, polite-free technical answers, saving ~40% - 60% completion tokens.

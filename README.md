@@ -1,16 +1,18 @@
-# Antigravity Multi-Account Proxy v2.3.0
+# Antigravity Multi-Account Proxy v2.3.1
 
-![Version](https://img.shields.io/badge/version-2.3.0-0284c7)
+![Version](https://img.shields.io/badge/version-2.3.1-0284c7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity accounts into a single load-balanced endpoint with automatic rate-limit failover, quota tracking, session authentication, multi-API key support, and built-in token optimization plugins.
 
 ---
 
-## What's New in v2.3.0
+## What's New in v2.3.1
 
+- **Per-Request Optimizer Override:** Clients can now override global optimizer settings per request via the payload (`{"optimizers": {"caveman": false}}`) or custom header (`X-Optimizer-Caveman: false`). Ideal for keeping Caveman ON for coding while forcing it OFF for in-depth research or tutoring sessions.
 - **Prompt Cache Optimization:** Improved optimizer and increased cache hit rate using conversation seed hashing.
-- **Modular Core Architecture:** Refactored into clean, maintainable sub-modules under `core/` (`account_manager`, `translator`, `optimizers`, `response_formatter`) and `templates/`.
+- **Modular Core Architecture:** Refactored into clean sub-modules under `core/` and HTML views under `templates/`.
+- **Token Optimization Suite:** Built-in RTK, Caveman, and Ponytail plugins with interactive Web UI toggles and comparison modals.
 - **Built-in Token Optimization Plugins:**
   - **RTK (Reduced Tool Kit):** Shell & terminal output trimmer that cuts out verbose build traces, package installation logs, and noisy traceback middles (Save ~30% - 50% input tokens).
   - **Caveman Mode:** Zero-slop prose compressor that eliminates AI pleasantries, conversational fluff, and generic greetings in favor of direct technical answers (Save ~40% - 60% output tokens).
@@ -59,6 +61,30 @@ Control plugins dynamically via dashboard or `config.json`:
 ### 3. Ponytail Mode
 - **Problem:** Coding assistants frequently rewrite an entire 500-line file when only modifying a single variable or function call.
 - **Solution:** Enforces targeted diffs and surgical patches, preserving context space for larger multi-file coding sessions.
+
+### Per-Request Optimizer Override
+Clients can override global settings dynamically per request:
+```bash
+# Option A: via JSON payload parameter
+curl http://localhost:20130/v1/chat/completions \
+  -H "Authorization: Bearer <key>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-3.8-flash-high",
+    "messages": [{"role": "user", "content": "Explain Spring Boot architecture in depth"}],
+    "optimizers": {"caveman": false}
+  }'
+
+# Option B: via HTTP Header
+curl http://localhost:20130/v1/chat/completions \
+  -H "Authorization: Bearer <key>" \
+  -H "X-Optimizer-Caveman: false" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-3.8-flash-high",
+    "messages": [{"role": "user", "content": "Analyze system performance"}]
+  }'
+```
 
 ---
 
