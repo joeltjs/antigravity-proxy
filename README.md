@@ -59,7 +59,7 @@ Control plugins dynamically via dashboard or `config.json`:
 - **Solution:** Enforces direct, high-density technical answers, drastically saving completion token spend and accelerating stream generation.
 
 ### 3. Ponytail Mode
-- **Problem:** Coding assistants frequently rewrite an entire 500-line file when only modifying a single variable or function call.
+- **Problem:** Coding assistants frequently rewrite an entire file from scratch when only modifying a minor variable or function call.
 - **Solution:** Enforces targeted diffs and surgical patches, preserving context space for larger multi-file coding sessions.
 
 ### Per-Request Optimizer Override
