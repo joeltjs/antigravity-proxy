@@ -706,7 +706,7 @@ def _compress_rtk(text):
     return "\n".join(head) + f"\n\n[... RTK: {omitted} lines of noisy build/shell output truncated ...]\n\n" + "\n".join(tail)
 
 
-def openai_to_antigravity(body):
+def openai_to_antigravity(body, request_headers=None):
     messages = body.get("messages", [])
     model = body.get("model", "gemini-3-flash")
     stream = body.get("stream", False)
@@ -809,16 +809,27 @@ def openai_to_antigravity(body):
                     "args": args}})
         if parts:
             contents.append({"role": ag_role, "parts": parts})
+    # Per-request optimizer overrides (via body parameters or HTTP headers)
+    # Allows learning sessions / detail analyses to force Caveman OFF even if globally ON
+    opts = dict(OPTIMIZERS)
+    if isinstance(body.get("optimizers"), dict):
+        opts.update(body["optimizers"])
+    if request_headers:
+        if request_headers.get("X-Optimizer-Caveman") == "false" or request_headers.get("x-optimizer-caveman") == "false":
+            opts["caveman"] = False
+        elif request_headers.get("X-Optimizer-Caveman") == "true" or request_headers.get("x-optimizer-caveman") == "true":
+            opts["caveman"] = True
+
     # Gemini requires strict user/model alternation — merge adjacent same-role entries
     # Optimizer directive injections (Caveman & Ponytail)
     injected_instructions = []
-    if OPTIMIZERS.get("caveman"):
+    if opts.get("caveman"):
         injected_instructions.append(
             "[OPTIMIZER: CAVEMAN MODE ACTIVE]\n"
             "Be extremely direct and succinct. Omit polite pleasantries, filler phrases, and repetitive conversational fluff. "
             "Get straight to the answer or technical solution."
         )
-    if OPTIMIZERS.get("ponytail"):
+    if opts.get("ponytail"):
         injected_instructions.append(
             "[OPTIMIZER: PONYTAIL MODE ACTIVE]\n"
             "When modifying code, write minimal targeted diffs or surgical snippets instead of rewriting entire files. "
@@ -1617,7 +1628,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     json.dump(body, _f, indent=1)
             except Exception:
                 pass
-        ag_body, ag_stream = openai_to_antigravity(body)
+        ag_body, ag_stream = openai_to_antigravity(body, request_headers=self.headers)
 
         excluded_email = None
         for attempt in range(MAX_RETRIES):
