@@ -130,6 +130,14 @@ def openai_to_antigravity(body: Dict[str, Any], optimizers: Dict[str, bool]) -> 
         else:
             merged.append({"role": c["role"], "parts": list(c["parts"])})
 
+    # Guard: Google Antigravity rejects requests ending with role: "model"
+    # If the payload ends with model (e.g. from tool calls or interrupted turn),
+    # pop trailing model turn or append a continuation prompt to satisfy API constraint.
+    while merged and merged[-1]["role"] == "model":
+        merged.pop()
+    if not merged:
+        merged.append({"role": "user", "parts": [{"text": "Continue"}]})
+
     gen_config: Dict[str, Any] = {"maxOutputTokens": max_tokens}
     if temperature is not None: gen_config["temperature"] = temperature
     if top_p is not None: gen_config["topP"] = top_p

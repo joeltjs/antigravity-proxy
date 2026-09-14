@@ -1,11 +1,14 @@
-# Antigravity Multi-Account Proxy v2.3.1
+# Antigravity Multi-Account Proxy v2.3.2
 
-![Version](https://img.shields.io/badge/version-2.3.1-0284c7)
+![Version](https://img.shields.io/badge/version-2.3.2-0284c7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity accounts into a single load-balanced endpoint with automatic rate-limit failover, quota tracking, session authentication, multi-API key support, and built-in token optimization plugins.
 
 ---
+
+## What's New in v2.3.2
+- **Turn Sanitization Guard:** Automatically sanitizes trailing assistant/model turns in incoming conversation history to prevent HTTP 400 `Requests ending with a model turn are not supported` from interrupting multi-turn workflows.
 
 ## What's New in v2.3.1
 
