@@ -5,24 +5,14 @@
 
 OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity accounts into a single load-balanced endpoint with automatic rate-limit failover, quota tracking, session authentication, multi-API key support, and built-in token optimization plugins.
 
+![Antigravity Proxy Dashboard](docs/dashboard_hero_native.png)
+
 ---
 
 ## What's New in v2.3.2
 - **Turn Sanitization Guard:** Automatically sanitizes trailing assistant/model turns in incoming conversation history to prevent HTTP 400 `Requests ending with a model turn are not supported` from interrupting multi-turn workflows.
 
-## What's New in v2.3.1
-
-- **Per-Request Optimizer Override:** Clients can now override global optimizer settings per request via the payload (`{"optimizers": {"caveman": false}}`) or custom header (`X-Optimizer-Caveman: false`). Ideal for keeping Caveman ON for coding while forcing it OFF for in-depth research or tutoring sessions.
-- **Prompt Cache Optimization:** Improved optimizer and increased cache hit rate using conversation seed hashing.
-- **Modular Core Architecture:** Refactored into clean sub-modules under `core/` and HTML views under `templates/`.
-- **Token Optimization Suite:** Built-in RTK, Caveman, and Ponytail plugins with interactive Web UI toggles and comparison modals.
-- **Built-in Token Optimization Plugins:**
-  - **RTK (Reduced Tool Kit):** Shell & terminal output trimmer that cuts out verbose build traces, package installation logs, and noisy traceback middles (Save ~30% - 50% input tokens).
-  - **Caveman Mode:** Zero-slop prose compressor that eliminates AI pleasantries, conversational fluff, and generic greetings in favor of direct technical answers (Save ~40% - 60% output tokens).
-  - **Ponytail Mode:** Surgical code diff mode that prevents models from rewriting entire 400+ line files for minor 2-line edits (Save ~50% - 70% code context).
-- **Interactive Optimizer Controls:** Toggle plugins on the fly directly from the Web Dashboard or config file, complete with side-by-side token saving comparisons.
-- **Accurate Real-Time Quota Tracking:** Fixed quota endpoint synchronization with `daily-cloudcode-pa` to accurately reflect account usage fractions in real time.
-- **Streaming Reasoning Content:** Native support for streaming thinking chunks (`includeThoughts: true`) in OpenAI-compatible format.
+---
 
 ---
 
