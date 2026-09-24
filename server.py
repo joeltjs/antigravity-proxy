@@ -1487,6 +1487,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 self._send_json(500, {"error": {"message": f"Failed to read 9router database: {str(e)}"}})
             return
+        if self.path == "/v1/api-keys/create" or self.path == "/v1/api-key/generate":
             body_raw, _ = self._read_body(64 * 1024)
             name = "API Key"
             if body_raw:
