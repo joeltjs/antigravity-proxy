@@ -126,6 +126,7 @@
     <h1><span class="header-title-main">Antigravity</span> Proxy <span class="tag tag-roundrobin" id="strategy-tag">round-robin</span></h1>
     <div class="header-actions">
       <button class="btn btn-ghost btn-sm" onclick="importFrom9router()" title="Import accounts from local 9router SQLite database">Import 9router</button>
+      <button class="btn btn-ghost btn-sm" id="start-acc-btn" onclick="showSelectStartModal()" title="Select starting active account">Start: <span id="current-start-label" style="color:#38bdf8;font-weight:600">auto</span></button>
       <button class="btn btn-ghost btn-sm" onclick="showAllModels()" title="List all upstream models per pool">Models</button>
       <button class="btn btn-ghost btn-sm" id="strategy-btn" onclick="toggleStrategy()" title="Click to change routing mode">Change Mode</button>
       <button class="btn btn-ghost btn-sm" onclick="refreshQuota()">Refresh Quota</button>
@@ -452,7 +453,16 @@ function groupQuota(quota) {
     if (!fam) return; // Skip internal / unmapped
     if (!groups[fam]) groups[fam] = { frac: 1, resetTime: null, models: [] };
     groups[fam].frac = Math.min(groups[fam].frac, Number(q.remainingFraction)||0);
-    groups[fam].resetTime = q.resetTime || groups[fam].resetTime;
+    // Prioritaskan resetTime mingguan / terjauh agar tidak rancu dengan flash 5h
+    if (q.resetTime) {
+      if (!groups[fam].resetTime) {
+        groups[fam].resetTime = q.resetTime;
+      } else {
+        const curDate = new Date(groups[fam].resetTime);
+        const newDate = new Date(q.resetTime);
+        if (newDate > curDate) groups[fam].resetTime = q.resetTime;
+      }
+    }
     groups[fam].models.push(id);
   });
   return groups;
@@ -532,11 +542,14 @@ async function load() {
           const toggleBtn = a.disabled
             ? `<button class="btn btn-ghost btn-sm" onclick="toggleAcc(${idx})">Enable</button>`
             : `<button class="btn btn-ghost btn-sm" onclick="toggleAcc(${idx})">Disable</button>`;
+          const setStartBtn = !a.disabled
+            ? `<button class="btn btn-sm" style="background:#0284c7;color:#fff;border:none;font-size:11px;padding:3px 8px;border-radius:6px" onclick="setActiveStart('${esc(a.email)}')">⭐ Start Here</button>`
+            : '';
           return `<div class="acc-card ${a.disabled ? 'disabled' : ''}">
             <div>
               <div class="acc-header">
                 <span class="acc-email">${esc(a.email)}</span>
-                <div style="display:flex;gap:6px;align-items:center">${badge}${toggleBtn}<button class="btn btn-danger btn-sm" onclick="removeAcc(${idx})">Delete</button></div>
+                <div style="display:flex;gap:6px;align-items:center">${badge}${setStartBtn}${toggleBtn}<button class="btn btn-danger btn-sm" onclick="removeAcc(${idx})">Delete</button></div>
               </div>
               <div class="acc-stats">
                 <span> TTL: <b>${expMin}</b></span>
@@ -551,6 +564,13 @@ async function load() {
     document.getElementById('accounts').innerHTML = html;
     // Simpan index→email map untuk hapus akun (hindari injection via email di onclick)
     window._accEmails = accs.map(a => a.email);
+    window._cachedAccounts = accs;
+    if (data.active_account) {
+      _currentActiveAccount = data.active_account;
+      const shortEmail = data.active_account.split('@')[0];
+      const lbl = document.getElementById('current-start-label');
+      if (lbl) lbl.textContent = shortEmail;
+    }
     document.getElementById('s-total').textContent = accs.length;
     document.getElementById('s-active').textContent = active;
     document.getElementById('s-req').textContent = totalReq;
@@ -591,6 +611,87 @@ async function removeAcc(idx) {
   await api('/v1/accounts/remove', {method:'POST', body: JSON.stringify({email})});
   load();
 }
+
+
+let _currentActiveAccount = null;
+
+function showSelectStartModal() {
+  const activeList = (window._cachedAccounts || []).filter(a => !a.disabled);
+  if (activeList.length === 0) {
+    Swal.fire({
+      icon: 'info',
+      title: 'No Active Accounts',
+      text: 'All accounts in the pool are currently disabled.',
+      background: '#0d111a',
+      color: '#f8fafc'
+    });
+    return;
+  }
+
+  let optionsHtml = activeList.map(a => {
+    const isSelected = a.email === _currentActiveAccount ? 'selected' : '';
+    const reqs = a.requests || 0;
+    const errs = a.errors || 0;
+    return `<option value="${esc(a.email)}" ${isSelected}>${esc(a.email)} (Req: ${reqs}, Err: ${errs})</option>`;
+  }).join('');
+
+  Swal.fire({
+    title: 'Select Starting Account',
+    html: `
+      <div style="text-align:left;font-size:13px;color:#94a3b8;margin-bottom:12px;">
+        Choose which Google account will be used first. In <b>sticky</b> mode it will lock to this account; in <b>round-robin</b> mode it will start here.
+      </div>
+      <div style="text-align:left;">
+        <label style="font-size:12px;font-weight:600;color:#cbd5e1;display:block;margin-bottom:6px;">Active Account:</label>
+        <select id="swal-start-acc-select" style="width:100%;background:#161c28;border:1px solid #334155;color:#f8fafc;padding:10px 12px;border-radius:8px;font-size:13px;outline:none;cursor:pointer;">
+          ${optionsHtml}
+        </select>
+      </div>
+      <div style="margin-top:14px;font-size:11px;color:#64748b;text-align:left;">
+        ⚡ Instant switch: Selecting an option immediately activates the account.
+      </div>
+    `,
+    background: '#0d111a',
+    color: '#f8fafc',
+    showConfirmButton: false,
+    showCancelButton: true,
+    cancelButtonText: 'Close',
+    cancelButtonColor: '#334155',
+    didOpen: () => {
+      const selectEl = document.getElementById('swal-start-acc-select');
+      if (selectEl) {
+        selectEl.addEventListener('change', async (e) => {
+          const chosenEmail = e.target.value;
+          if (chosenEmail) {
+            Swal.close();
+            await setActiveStart(chosenEmail);
+          }
+        });
+      }
+    }
+  });
+}
+
+async function setActiveStart(email) {
+  try {
+    const r = await fetch('/v1/accounts/active', {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      showToast('⭐ Active starting account set to: ' + email);
+      load();
+    } else {
+      showToast('⚠️ Failed: ' + (d.error ? d.error.message : 'Unknown error'), true);
+    }
+  } catch(e) {
+    showToast('⚠️ Request failed', true);
+  }
+}
+
 async function toggleAcc(idx) {
   const email = window._accEmails && window._accEmails[idx];
   if (!email) { showToast(' Account not found', true); return; }

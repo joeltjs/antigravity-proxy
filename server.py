@@ -500,6 +500,7 @@ class AccountState:
 
 ACCOUNT_STATES = [AccountState(a) for a in ACCOUNTS]
 _round_robin_idx = 0
+_sticky_account_email = None
 _rr_lock = threading.Lock()
 
 
@@ -511,9 +512,24 @@ def get_next_account():
         if not available:
             return None
         if STRATEGY == "sticky":
-            # Use the first non-rate-limited account; only fall back if all limited
+            # Use active sticky account; if rate limited or error, advance sticky pointer
+            global _sticky_account_email
+            if '_sticky_account_email' not in globals() or not _sticky_account_email:
+                # Check if user set active_account preference in config
+                pref = CONFIG.get("active_account")
+                if pref and any(a.email == pref and not a.disabled for a in available):
+                    _sticky_account_email = pref
+                else:
+                    _sticky_account_email = available[0].email
+
+            current_sticky = next((a for a in available if a.email == _sticky_account_email), None)
+            if current_sticky and now >= current_sticky.rate_limited_until:
+                return current_sticky
+
+            # Fallback & migrate sticky anchor to next healthy account
             for acc in available:
                 if now >= acc.rate_limited_until:
+                    _sticky_account_email = acc.email
                     return acc
             return available[0]
         for _ in range(len(available)):
@@ -1137,9 +1153,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         if self.path == "/v1/accounts":
             if not self._check_auth(): return
+            active_acc = _sticky_account_email if STRATEGY == "sticky" else (ACCOUNT_STATES[_round_robin_idx % len(ACCOUNT_STATES)].email if ACCOUNT_STATES else None)
             self._send_json(200, {
                 "accounts": [a.status() for a in ACCOUNT_STATES],
                 "strategy": STRATEGY,
+                "active_account": active_acc or CONFIG.get("active_account"),
                 "optimizers": OPTIMIZERS
             })
             return
@@ -1193,12 +1211,48 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"error": {"message": "Not found"}})
 
     def do_PUT(self):
-        """PUT /v1/strategy — switch between round-robin and sticky."""
-        global STRATEGY
+        """PUT /v1/strategy or /v1/accounts/active — switch strategy or set starting account."""
+        global STRATEGY, _sticky_account_email, _round_robin_idx
         if not self._check_auth(): return
         if self.path == "/v1/optimizers/toggle" or self.path == "/api/optimizers/toggle":
             # Handled via PUT
             pass
+
+        if self.path == "/v1/accounts/active":
+            body_raw, err = self._read_body(4096)
+            if err or body_raw is None:
+                self._send_json(413, {"error": {"message": err or "Empty body"}})
+                return
+            try:
+                req = json.loads(body_raw)
+                target_email = req.get("email", "").strip()
+            except Exception:
+                self._send_json(400, {"error": {"message": "Invalid JSON"}})
+                return
+
+            acc_idx = -1
+            for i, a in enumerate(ACCOUNT_STATES):
+                if a.email == target_email:
+                    acc_idx = i
+                    break
+            if acc_idx == -1:
+                self._send_json(404, {"error": {"message": f"Account '{target_email}' not found"}})
+                return
+
+            with _rr_lock:
+                _sticky_account_email = target_email
+                _round_robin_idx = acc_idx
+
+            CONFIG["active_account"] = target_email
+            try:
+                with open(CONFIG_PATH, "w") as f:
+                    json.dump(CONFIG, f, indent=2)
+            except Exception as e:
+                print(f"  [WARN] Save active account: {e}")
+
+            print(f"  [ROUTING] Active starting account manually set to: {target_email} (index {acc_idx})")
+            self._send_json(200, {"ok": True, "active_account": target_email, "strategy": STRATEGY, "index": acc_idx})
+            return
 
         if self.path == "/v1/strategy":
             body_raw, err = self._read_body(4096)
@@ -1673,11 +1727,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 elif e.code == 429:
                     account.rate_limited_until = time.time() + 300
                     log_event("WARN", f"Account {account.email} RATE LIMITED (429) - cooldown 5 min, switching account")
-                    excluded_email = account.email
-                    continue
                 else:
-                    excluded_email = account.email
-                    continue
+                    # HTTP 403 or other persistent error: cooldown 10 minutes so sticky advances!
+                    account.rate_limited_until = time.time() + 600
+                    log_event("WARN", f"Account {account.email} ERROR ({e.code}) - cooldown 10 min, switching account")
+                
+                # Update global sticky anchor to the fallback account immediately
+                if STRATEGY == "sticky":
+                    global _sticky_account_email
+                    fallback = get_fallback_account(account.email)
+                    if fallback:
+                        _sticky_account_email = fallback.email
+                excluded_email = account.email
+                continue
             except Exception as e:
                 account.error_count += 1
                 account.last_error = str(e)
