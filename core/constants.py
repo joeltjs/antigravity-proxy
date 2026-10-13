@@ -15,13 +15,6 @@ MODEL_MAP = {
     "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
     "gemini-3.8-flash-medium": "gemini-3.8-flash-tiered",
 
-    # Gemini 3.7 Series: upstream Google engine is 'gemini-3.7-flash-tiered'
-    "gemini-3.7-flash-high": "gemini-3.7-flash-tiered",
-
-    # Gemini 3.6 & 3.1 Pro Series
-    "gemini-3.6-flash-high": "gemini-3.6-flash-high",
-    "gemini-3.1-pro-high": "gemini-pro-agent",
-
     # Claude Series: thinking enabled natively
     "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
     "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
@@ -31,23 +24,9 @@ FULL_MODEL_CATALOG = [
     {"id": "gemini-3.8-flash-high", "display": "Gemini 3.8 Flash (High)", "kind": "chat"},
     {"id": "gemini-3.8-flash-medium", "display": "Gemini 3.8 Flash (Medium)", "kind": "chat"},
     {"id": "gemini-3.8-flash-tiered", "display": "Gemini 3.8 Flash (Tiered)", "kind": "chat"},
-    {"id": "gemini-3.7-flash-high", "display": "Gemini 3.7 Flash (High)", "kind": "chat"},
-    {"id": "gemini-3.7-flash-tiered", "display": "Gemini 3.7 Flash (Tiered)", "kind": "chat"},
-    {"id": "gemini-3.6-flash-tiered", "display": "Gemini 3.6 Flash (Tiered)", "kind": "chat"},
-    {"id": "gemini-3.6-flash-high", "display": "Gemini 3.6 Flash (High)", "kind": "chat"},
-    {"id": "gemini-3.6-flash-medium", "display": "Gemini 3.6 Flash (Medium)", "kind": "chat"},
-    {"id": "gemini-3.6-flash-low", "display": "Gemini 3.6 Flash (Low)", "kind": "chat"},
-    {"id": "gemini-3.5-flash-high", "display": "Gemini 3.5 Flash (High)", "kind": "chat"},
-    {"id": "gemini-3-flash-agent", "display": "Gemini 3 Flash Agent", "kind": "chat"},
-    {"id": "gemini-3.5-flash-low", "display": "Gemini 3.5 Flash (Medium)", "kind": "chat"},
-    {"id": "gemini-3.5-flash-extra-low", "display": "Gemini 3.5 Flash (Low)", "kind": "chat"},
-    {"id": "gemini-pro-agent", "display": "Gemini 3.1 Pro (High)", "kind": "chat"},
-    {"id": "gemini-3.1-pro-low", "display": "Gemini 3.1 Pro (Low)", "kind": "chat"},
     {"id": "claude-sonnet-4-6", "display": "Claude Sonnet 4.6 (Thinking)", "kind": "chat"},
     {"id": "claude-opus-4-6-thinking", "display": "Claude Opus 4.6 (Thinking)", "kind": "chat"},
-    {"id": "gpt-oss-120b-medium", "display": "GPT-OSS 120B (Medium)", "kind": "completion"},
-    {"id": "gemini-3-flash", "display": "Gemini 3 Flash", "kind": "chat"},
-    {"id": "gemini-3.1-flash-image", "display": "Gemini 3.1 Flash (Image)", "kind": "image"},
+    {"id": "gemini-2.5-flash", "display": "Gemini 2.5 Flash", "kind": "chat"},
 ]
 
 DEFAULT_THOUGHT_SIGNATURE = (

@@ -239,7 +239,7 @@
     </div>
     <div class="endpoint-box">
       <b>Base URL:</b> <code id="ep-base"></code><br>
-      <b>Models:</b> gemini-3.8-flash-high, gemini-3.8-flash-medium, gemini-3.7-flash-high, gemini-3.6-flash-high, gemini-3.1-pro-high, claude-sonnet-4-6-thinking, claude-opus-4-6-thinking<br><br>
+      <b>Models:</b> gemini-3.8-flash-high, gemini-3.8-flash-medium, claude-sonnet-4-6-thinking, claude-opus-4-6-thinking<br><br>
       <b>Test Command:</b><br>
       <code id="ep-curl" style="display:block;padding:10px;white-space:pre-wrap;word-break:break-word;overflow-x:auto"></code>
     </div>
@@ -542,14 +542,11 @@ async function load() {
           const toggleBtn = a.disabled
             ? `<button class="btn btn-ghost btn-sm" onclick="toggleAcc(${idx})">Enable</button>`
             : `<button class="btn btn-ghost btn-sm" onclick="toggleAcc(${idx})">Disable</button>`;
-          const setStartBtn = !a.disabled
-            ? `<button class="btn btn-sm" style="background:#0284c7;color:#fff;border:none;font-size:11px;padding:3px 8px;border-radius:6px" onclick="setActiveStart('${esc(a.email)}')">⭐ Start Here</button>`
-            : '';
           return `<div class="acc-card ${a.disabled ? 'disabled' : ''}">
             <div>
               <div class="acc-header">
                 <span class="acc-email">${esc(a.email)}</span>
-                <div style="display:flex;gap:6px;align-items:center">${badge}${setStartBtn}${toggleBtn}<button class="btn btn-danger btn-sm" onclick="removeAcc(${idx})">Delete</button></div>
+                <div style="display:flex;gap:6px;align-items:center">${badge}${toggleBtn}<button class="btn btn-danger btn-sm" onclick="removeAcc(${idx})">Delete</button></div>
               </div>
               <div class="acc-stats">
                 <span> TTL: <b>${expMin}</b></span>
@@ -1152,7 +1149,7 @@ function fillEndpoint(){
     `curl ${base}/chat/completions \\\n` +
     `  -H "Authorization: Bearer ${sampleKey}" \\\n` +
     `  -H "Content-Type: application/json" \\\n` +
-    `  -d '{"model":"gemini-3.7-flash-high","messages":[{"role":"user","content":"hi"}]}'`;
+    `  -d '{"model":"gemini-3.8-flash-high","messages":[{"role":"user","content":"hi"}]}'`;
 }
 fillEndpoint();
 loadApiKeys();

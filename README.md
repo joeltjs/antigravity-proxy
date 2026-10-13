@@ -1,6 +1,6 @@
-# Antigravity Multi-Account Proxy v2.3.2
+# Antigravity Multi-Account Proxy v2.3.5
 
-![Version](https://img.shields.io/badge/version-2.3.2-0284c7)
+![Version](https://img.shields.io/badge/version-2.3.5-0284c7)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity accounts into a single load-balanced endpoint with automatic rate-limit failover, quota tracking, session authentication, multi-API key support, and built-in token optimization plugins.
@@ -9,10 +9,9 @@ OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity acco
 
 ---
 
-## What's New in v2.3.2
-- **Turn Sanitization Guard:** Automatically sanitizes trailing assistant/model turns in incoming conversation history to prevent HTTP 400 `Requests ending with a model turn are not supported` from interrupting multi-turn workflows.
-
----
+## What's New in v2.3.5
+- **Streamlined Account Start Selector:** Cleaned up repetitive account card action buttons in favor of the unified header `Start: [email]` dropdown selector next to Import 9router.
+- **Model Catalog Pruning:** Pruned deprecated upstream models (Gemini 3.6, 3.7, and 3.1 Pro) that return 404 from upstream Antigravity; standardized on `gemini-3.8-flash-high` / `gemini-3.8-flash-medium` and Claude 4.6 models.
 
 ---
 
@@ -22,9 +21,6 @@ OpenAI-compatible reverse proxy that aggregates multiple Google Antigravity acco
 |---|---|---|
 | `gemini-3.8-flash-high` | `gemini-3.8-flash-tiered` | `thinkingLevel: high` |
 | `gemini-3.8-flash-medium` | `gemini-3.8-flash-tiered` | `thinkingLevel: medium` |
-| `gemini-3.7-flash-high` | `gemini-3.7-flash-tiered` | `thinkingLevel: high` |
-| `gemini-3.6-flash-high` | `gemini-3.6-flash-high` | `thinkingBudget: 24576` |
-| `gemini-3.1-pro-high` | `gemini-pro-agent` | `thinkingBudget: 24576` |
 | `claude-sonnet-4-6-thinking` | `claude-sonnet-4-6` | Thinking enabled |
 | `claude-opus-4-6-thinking` | `claude-opus-4-6-thinking` | Thinking enabled |
 
