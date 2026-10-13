@@ -130,6 +130,10 @@ def openai_to_antigravity(body: Dict[str, Any], optimizers: Dict[str, bool]) -> 
         else:
             merged.append({"role": c["role"], "parts": list(c["parts"])})
 
+    # Guard: Google Antigravity rejects requests where a model turn containing functionCall is the first turn
+    if merged and merged[0]["role"] != "user":
+        merged.insert(0, {"role": "user", "parts": [{"text": "..."}]})
+
     # Guard: Google Antigravity rejects requests ending with role: "model"
     # If the payload ends with model (e.g. from tool calls or interrupted turn),
     # pop trailing model turn or append a continuation prompt to satisfy API constraint.

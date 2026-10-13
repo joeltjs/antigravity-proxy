@@ -844,6 +844,20 @@ def openai_to_antigravity(body, request_headers=None):
             merged[-1]["parts"].extend(c["parts"])
         else:
             merged.append({"role": c["role"], "parts": list(c["parts"])})
+
+    # Guard 1: Ensure initial turn is 'user'
+    # If history begins with a model turn (e.g. after client compacts/slices history),
+    # Google rejects requests where a model turn containing functionCall is the first turn with:
+    # "Please ensure that function call turn comes immediately after a user turn or after a function response turn."
+    if merged and merged[0]["role"] != "user":
+        merged.insert(0, {"role": "user", "parts": [{"text": "..."}]})
+
+    # Guard 2: Google Antigravity rejects requests ending with role: "model"
+    while merged and merged[-1]["role"] == "model":
+        merged.pop()
+    if not merged:
+        merged.append({"role": "user", "parts": [{"text": "Continue"}]})
+
     contents = merged
     gen_config = {"maxOutputTokens": max_tokens}
     if temperature is not None: gen_config["temperature"] = temperature
