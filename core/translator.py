@@ -22,7 +22,15 @@ def clean_schema_for_gemini(schema: Any) -> Any:
     for k, v in schema.items():
         if k in drop_keys:
             continue
-        if k == "properties" and isinstance(v, dict):
+        if k == "type":
+            if isinstance(v, list):
+                non_null = [t for t in v if t != "null"]
+                clean["type"] = non_null[0] if non_null else "string"
+                if "null" in v:
+                    clean["nullable"] = True
+            else:
+                clean["type"] = v
+        elif k == "properties" and isinstance(v, dict):
             clean[k] = {pk: clean_schema_for_gemini(pv) for pk, pv in v.items()}
         elif k == "items":
             clean[k] = clean_schema_for_gemini(v)

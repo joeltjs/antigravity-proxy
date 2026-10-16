@@ -655,7 +655,15 @@ def _clean_schema_for_gemini(schema):
     for k, v in schema.items():
         if k not in ALLOWED_KEYS:
             continue
-        if k == "properties" and isinstance(v, dict):
+        if k == "type":
+            if isinstance(v, list):
+                non_null = [t for t in v if t != "null"]
+                cleaned["type"] = non_null[0] if non_null else "string"
+                if "null" in v:
+                    cleaned["nullable"] = True
+            else:
+                cleaned["type"] = v
+        elif k == "properties" and isinstance(v, dict):
             cleaned[k] = {pk: _clean_schema_for_gemini(pv) for pk, pv in v.items()}
         elif k == "items" and isinstance(v, dict):
             cleaned[k] = _clean_schema_for_gemini(v)
