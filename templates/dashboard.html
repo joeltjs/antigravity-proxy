@@ -223,11 +223,12 @@
             <th style="padding:8px 10px;white-space:nowrap">Name</th>
             <th style="padding:8px 10px;white-space:nowrap">API Key</th>
             <th style="padding:8px 10px;white-space:nowrap">Created</th>
+            <th style="padding:8px 10px;white-space:nowrap">Expiration</th>
             <th style="padding:8px 10px;text-align:right;white-space:nowrap">Action</th>
           </tr>
         </thead>
         <tbody id="api-keys-table">
-          <tr><td colspan="4" style="padding:12px 6px;color:#94a3b8">Loading keys...</td></tr>
+          <tr><td colspan="5" style="padding:12px 6px;color:#94a3b8">Loading keys...</td></tr>
         </tbody>
       </table>
     </div>
@@ -1025,11 +1026,24 @@ async function loadApiKeys() {
 function renderApiKeysTable() {
   const tbody = document.getElementById('api-keys-table');
   if (!allApiKeys.length) {
-    tbody.innerHTML = '<tr><td colspan="4" style="padding:12px 6px;color:#71717a">No API keys configured. Click "+ Create New Key" to create one.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="5" style="padding:12px 6px;color:#71717a">No API keys configured. Click "+ Create New Key" to create one.</td></tr>';
     return;
   }
+  const now = Math.floor(Date.now() / 1000);
   tbody.innerHTML = allApiKeys.map((k, idx) => {
     const createdStr = k.created ? new Date(k.created * 1000).toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'}) : '-';
+    let expBadge = '<span style="color:#94a3b8;font-size:11px">Never</span>';
+    if (k.expires_at) {
+      const expDate = new Date(k.expires_at * 1000);
+      const isExpired = now > k.expires_at;
+      const dateStr = expDate.toLocaleDateString('en-GB', {day:'2-digit', month:'short', year:'numeric'});
+      if (isExpired) {
+        expBadge = `<span style="background:rgba(248,113,113,0.15);color:#f87171;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid rgba(248,113,113,0.3)">Expired (${dateStr})</span>`;
+      } else {
+        const daysLeft = Math.ceil((k.expires_at - now) / 86400);
+        expBadge = `<span style="background:rgba(56,189,248,0.15);color:#38bdf8;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid rgba(56,189,248,0.3)">${dateStr} (${daysLeft}d left)</span>`;
+      }
+    }
     return `
       <tr style="border-bottom:1px solid rgba(255,255,255,0.06);transition:background .2s" onmouseover="this.style.background='rgba(255,255,255,0.02)'" onmouseout="this.style.background='transparent'">
         <td style="padding:10px 10px;font-weight:600;color:#f1f5f9;white-space:nowrap">${esc(k.name || 'API Key')}</td>
@@ -1040,6 +1054,7 @@ function renderApiKeysTable() {
           </div>
         </td>
         <td style="padding:10px 10px;color:#94a3b8;font-size:11px;white-space:nowrap">${createdStr}</td>
+        <td style="padding:10px 10px;white-space:nowrap">${expBadge}</td>
         <td style="padding:10px 10px;text-align:right;white-space:nowrap">
           <button onclick="deleteApiKey('${esc(k.id)}', '${esc(k.key)}', '${esc(k.name)}')" class="btn btn-danger btn-sm" style="padding:3px 10px;font-size:11px">Delete</button>
         </td>
@@ -1049,31 +1064,64 @@ function renderApiKeysTable() {
 }
 
 async function promptCreateApiKey() {
-  const { value: name } = await Swal.fire({
+  const { value: formValues } = await Swal.fire({
     title: 'Create New API Key',
-    input: 'text',
-    inputLabel: 'Key Label / Consumer Name',
-    inputPlaceholder: 'e.g. Kilo Code, Cursor, OpenCode',
+    html: `
+      <div style="text-align:left;font-size:13px;display:flex;flex-direction:column;gap:12px">
+        <div>
+          <label style="display:block;margin-bottom:4px;color:#94a3b8;font-weight:600">Key Label / Consumer Name</label>
+          <input id="swal-key-name" class="swal2-input" placeholder="e.g. Kilo Code, Cursor, OpenCode" style="margin:0;width:100%;box-sizing:border-box;background:#0d111a;border:1px solid #334155;color:#f8fafc">
+        </div>
+        <div>
+          <label style="display:block;margin-bottom:6px;color:#94a3b8;font-weight:600">Expiration</label>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <input type="checkbox" id="swal-no-exp" checked onchange="document.getElementById('swal-exp-date-wrap').style.display = this.checked ? 'none' : 'block'" style="width:16px;height:16px;cursor:pointer">
+            <label for="swal-no-exp" style="color:#f8fafc;cursor:pointer">No Expiration (Never expires)</label>
+          </div>
+          <div id="swal-exp-date-wrap" style="display:none">
+            <label style="display:block;margin-bottom:4px;color:#64748b;font-size:12px">Expire on Date:</label>
+            <input type="date" id="swal-exp-date" class="swal2-input" style="margin:0;width:100%;box-sizing:border-box;background:#0d111a;border:1px solid #334155;color:#f8fafc">
+          </div>
+        </div>
+      </div>
+    `,
     showCancelButton: true,
-    confirmButtonColor: '#3b82f6',
-    cancelButtonColor: '#27272a',
-    background: '#12141d',
-    color: '#f4f4f5'
+    confirmButtonText: 'Create Key',
+    confirmButtonColor: '#0284c7',
+    cancelButtonColor: '#1e293b',
+    background: '#0d111a',
+    color: '#f8fafc',
+    preConfirm: () => {
+      const name = document.getElementById('swal-key-name').value.trim();
+      const noExp = document.getElementById('swal-no-exp').checked;
+      const dateVal = document.getElementById('swal-exp-date').value;
+      if (!noExp && !dateVal) {
+        Swal.showValidationMessage('Please select an expiration date or check No Expiration');
+        return false;
+      }
+      let expires_at = null;
+      if (!noExp && dateVal) {
+        const d = new Date(dateVal + 'T23:59:59');
+        expires_at = Math.floor(d.getTime() / 1000);
+      }
+      return { name: name || 'API Key', expires_at };
+    }
   });
-  if (!name) return;
+
+  if (!formValues) return;
   try {
     const r = await api('/v1/api-keys/create', {
       method: 'POST',
-      body: JSON.stringify({ name: name.trim() || 'API Key' })
+      body: JSON.stringify(formValues)
     });
     if (r && r.success) {
       allApiKeys = r.api_keys;
       renderApiKeysTable();
       fillEndpoint();
-      Swal.fire({ icon: 'success', title: 'API Key Created', background: '#12141d', color: '#f4f4f5', timer: 1500, showConfirmButton: false });
+      Swal.fire({ icon: 'success', title: 'API Key Created', background: '#0d111a', color: '#f8fafc', timer: 1500, showConfirmButton: false });
     }
   } catch (e) {
-    Swal.fire({ icon: 'error', title: 'Failed to create key', background: '#12141d', color: '#f4f4f5' });
+    Swal.fire({ icon: 'error', title: 'Failed to create key', background: '#0d111a', color: '#f8fafc' });
   }
 }
 

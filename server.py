@@ -1042,8 +1042,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:].strip()
+            now = time.time()
             for k in API_KEYS:
                 if secrets.compare_digest(token, k["key"]):
+                    exp = k.get("expires_at")
+                    if exp is not None and exp > 0 and now > exp:
+                        log_event("WARN", f"Rejected expired API key: {k.get('name', k['id'])}")
+                        return False
                     return True
         return False
 
@@ -1545,21 +1550,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if self.path == "/v1/api-keys/create" or self.path == "/v1/api-key/generate":
             body_raw, _ = self._read_body(64 * 1024)
             name = "API Key"
+            expires_at = None
             if body_raw:
                 try:
                     req_data = json.loads(body_raw)
                     name = req_data.get("name", "API Key").strip() or "API Key"
+                    exp_val = req_data.get("expires_at")
+                    if exp_val is not None:
+                        try:
+                            exp_int = int(exp_val)
+                            if exp_int > 0:
+                                expires_at = exp_int
+                        except (ValueError, TypeError):
+                            pass
                 except Exception: pass
             new_key = "ag-proxy-" + secrets.token_hex(16)
             new_entry = {
                 "id": f"key-{int(time.time()*1000)}",
                 "name": name,
                 "key": new_key,
-                "created": int(time.time())
+                "created": int(time.time()),
+                "expires_at": expires_at
             }
             API_KEYS.append(new_entry)
             _save_api_keys()
-            log_event("INFO", f"Created new API key: {name}")
+            log_event("INFO", f"Created new API key: {name} (expires: {expires_at})")
             self._send_json(200, {"success": True, "api_key": new_key, "entry": new_entry, "api_keys": API_KEYS})
             return
 
