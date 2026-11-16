@@ -1,4 +1,5 @@
 config.json
+config.json.bak-*
 .env
 *.log
 usage.jsonl*
