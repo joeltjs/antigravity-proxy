@@ -533,15 +533,22 @@ _rr_lock = threading.Lock()
 
 
 def get_next_account():
-    global _round_robin_idx
+    global _round_robin_idx, _sticky_account_email
     now = time.time()
     with _rr_lock:
         available = [a for a in ACCOUNT_STATES if not a.disabled]
         if not available:
             return None
+        if STRATEGY == "restrict":
+            # Restrict mode: never hop accounts. Always the pinned account (or the first
+            # enabled one), even while it is cooling down — the client must back off.
+            if not _sticky_account_email:
+                pref = CONFIG.get("active_account")
+                pinned = next((a for a in available if a.email == pref), None)
+                _sticky_account_email = (pinned or available[0]).email
+            return next((a for a in available if a.email == _sticky_account_email), available[0])
         if STRATEGY == "sticky":
             # Use active sticky account; if rate limited or error, advance sticky pointer
-            global _sticky_account_email
             if '_sticky_account_email' not in globals() or not _sticky_account_email:
                 # Check if user set active_account preference in config
                 pref = CONFIG.get("active_account")
@@ -764,7 +771,17 @@ def openai_to_antigravity(body, request_headers=None):
     max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "200000"))
 
     def _msg_chars(msgs):
-        return sum(len(m.get("content")) for m in msgs if isinstance(m.get("content"), str))
+        # Measure the WHOLE message, not just `content`: an agent session carries most of its
+        # weight in tool_calls arguments and tool results, which are invisible when only the
+        # text field is counted. Those requests slip past a content-only guard and then blow
+        # the upstream per-minute token budget (429 on every account, quota still ~100%).
+        total = 0
+        for m in msgs:
+            try:
+                total += len(json.dumps(m, ensure_ascii=False, default=str))
+            except Exception:
+                total += len(str(m))
+        return total
 
     if max_chars > 0 and _msg_chars(messages) > max_chars:
         original_chars = _msg_chars(messages)
@@ -774,7 +791,7 @@ def openai_to_antigravity(body, request_headers=None):
         kept_reversed = []
         used = _msg_chars(volume_system + volume_head)
         for msg in reversed(volume_rest[len(volume_head):]):
-            size = len(msg.get("content")) if isinstance(msg.get("content"), str) else 0
+            size = _msg_chars([msg])
             if used + size > max_chars and kept_reversed:
                 break
             kept_reversed.append(msg)
@@ -1093,7 +1110,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Cache-Control", "no-store")
 
-    def _send_json(self, code, data, account_email=None, set_cookie=None):
+    def _send_json(self, code, data, account_email=None, set_cookie=None, extra_headers=None):
         body = json.dumps(data).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
@@ -1103,6 +1120,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Set-Cookie", set_cookie)
         if account_email:
             self.send_header("X-Account-Used", account_email)
+        for header_name, header_value in (extra_headers or {}).items():
+            self.send_header(header_name, str(header_value))
         self.end_headers()
         self.wfile.write(body)
 
@@ -1352,8 +1371,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except Exception:
                 self._send_json(400, {"error": {"message": "Invalid JSON"}})
                 return
-            if strategy not in ("round-robin", "sticky"):
-                self._send_json(400, {"error": {"message": "strategy must be 'round-robin' or 'sticky'"}})
+            if strategy not in ("round-robin", "sticky", "restrict"):
+                self._send_json(400, {"error": {"message": "strategy must be 'round-robin', 'sticky' or 'restrict'"}})
                 return
             STRATEGY = strategy
             CONFIG["strategy"] = strategy
@@ -1784,7 +1803,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         excluded_email = None
         retry_after = 0.0
-        for attempt in range(MAX_RETRIES):
+        # Restrict mode: single attempt, no account hop. The client gets the upstream verdict
+        # and backs off itself instead of the pool silently switching identity mid-session.
+        restrict_mode = STRATEGY == "restrict"
+        attempt_budget = 1 if restrict_mode else MAX_RETRIES
+        last_status = None
+        last_body = ""
+        account = None
+        for attempt in range(attempt_budget):
             if attempt:
                 delay = retry_after or (ATTEMPT_BACKOFF_BASE * attempt)
                 delay = max(0.2, min(delay, ATTEMPT_BACKOFF_MAX))
@@ -1829,6 +1855,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     retry_after = 0.0
                 account.error_count += 1
                 account.last_error = f"HTTP {e.code}: {err_body[:500]}"
+                last_status, last_body = e.code, err_body
                 print(f"  [ERR] {account.email}: {account.last_error}")
                 log_event("ERR", f"{account.email}: {account.last_error}")
                 if e.code == 401:
@@ -1872,6 +1899,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
         last_err = account.last_error if account else "No accounts"
         track_end(request_id)
         record_usage(model, 0, 0, 0, "error", (time.time() - usage_start) * 1000)
+        if restrict_mode and last_status:
+            # Surface the real upstream verdict (429/503/403) so the client can back off,
+            # instead of the generic 502 "all attempts failed" wrapper.
+            try:
+                payload = json.loads(last_body)
+            except Exception:
+                payload = {"error": {"message": str(last_body or last_err)[:500],
+                                     "code": last_status}}
+            status = last_status if last_status in (400, 401, 403, 429, 500, 502, 503, 504) else 502
+            headers = {"X-Account-Used": getattr(account, "email", "") or ""}
+            if status in (429, 503):
+                headers["Retry-After"] = str(int(min(max(retry_after or 20, 5), 120)))
+            self._send_json(status, payload, extra_headers=headers)
+            return
         self._send_json(502, {"error": {"message": f"All {MAX_RETRIES} attempts failed. Last: {last_err}"}})
 
     def _handle_nonstream(self, resp, model, request_id, account, started=0.0):
