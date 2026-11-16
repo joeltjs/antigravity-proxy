@@ -42,6 +42,17 @@ WARP_SOCKS5_HOST = "127.0.0.1"
 WARP_SOCKS5_PORT = 40000
 WARP_ENABLED = os.environ.get("WARP_ENABLED", "true").lower() == "true"
 
+# Client identity sent to Google CloudCode. Google retires old client builds and
+# answers them with a friendly "This version of Antigravity is no longer supported"
+# notice over HTTP 200 with no real content — it looks exactly like a dead/flagged
+# account but it is a stale User-Agent. Keep the version in ONE place so the next
+# retirement is a one-line fix; override with ANTIGRAVITY_CLIENT_VERSION if needed.
+ANTIGRAVITY_CLIENT_VERSION = os.environ.get("ANTIGRAVITY_CLIENT_VERSION", "2.29.0")
+ANTIGRAVITY_CLIENT_HEADERS = {
+    "User-Agent": f"antigravity/ide/{ANTIGRAVITY_CLIENT_VERSION} darwin/arm64",
+    "X-Client-Version": ANTIGRAVITY_CLIENT_VERSION,
+}
+
 GOOGLE_API_DOMAINS = [
     'daily-cloudcode-pa.googleapis.com',
     'cloudcode-pa.googleapis.com',
@@ -463,7 +474,7 @@ class AccountState:
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
-                    "User-Agent": "antigravity/ide/2.1.1 darwin/arm64"
+                    **ANTIGRAVITY_CLIENT_HEADERS,
                 })
             with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode())
@@ -711,6 +722,23 @@ def _compress_rtk(text):
 
 def openai_to_antigravity(body, request_headers=None):
     messages = body.get("messages", [])
+    # Context safety ring: Google's CloudCode abuse detector suspends whole accounts
+    # when a single sticky account receives very large conversation bursts (msgs 1000+).
+    # Keep system prompt + first user turn + the newest window, and align the window to
+    # a clean user turn so no functionCall/functionResponse pair is left dangling.
+    max_msgs = int(os.environ.get("AG_MAX_MESSAGES", "400"))
+    keep_recent = int(os.environ.get("AG_KEEP_RECENT_MESSAGES", "200"))
+    if len(messages) > max_msgs:
+        original_len = len(messages)
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        non_system = [m for m in messages if m.get("role") != "system"]
+        head = non_system[:1] if non_system and non_system[0].get("role") == "user" else []
+        tail = non_system[-keep_recent:]
+        while tail and tail[0].get("role") != "user":
+            tail = tail[1:]
+        messages = system_msgs + head + tail
+        print(f"[CTX] ring guard: {original_len} -> {len(messages)} msgs "
+              f"(dropped {original_len - len(messages)} from the middle)")
     model = body.get("model", "gemini-3-flash")
     stream = body.get("stream", False)
     max_tokens = body.get("max_tokens") or 8192
@@ -880,6 +908,11 @@ def openai_to_antigravity(body, request_headers=None):
             reasoning_effort = "low"
 
     if reasoning_effort:
+        # Minimum output budget per thinking level. With tiered models the `thinkingLevel`
+        # consumes part of maxOutputTokens, so a small client max_tokens leaves zero room
+        # for the visible answer (model stops with EMPTY content). Always reserve headroom.
+        budget_map = {"low": 1024, "medium": 8192, "high": 24576}
+        budget = budget_map.get(reasoning_effort, 8192)
         # Tiered models use thinkingLevel, others use thinkingBudget
         if ag_model and "tiered" in str(ag_model):
             gen_config["thinkingConfig"] = {
@@ -887,15 +920,13 @@ def openai_to_antigravity(body, request_headers=None):
                 "includeThoughts": True
             }
         else:
-            budget_map = {"low": 1024, "medium": 8192, "high": 24576}
-            budget = budget_map.get(reasoning_effort, 8192)
             gen_config["thinkingConfig"] = {
                 "thinkingBudget": budget,
                 "includeThoughts": True
             }
-            # Claude requires max_tokens > thinking budget — bump if needed
-            if max_tokens <= budget:
-                gen_config["maxOutputTokens"] = budget + 4096
+        # Claude/Gemini both require max_tokens > thinking budget — bump if needed
+        if max_tokens <= budget:
+            gen_config["maxOutputTokens"] = budget + 4096
     tools = []
     for tool in body.get("tools", []):
         if tool.get("type") == "function":
@@ -922,7 +953,7 @@ def antigravity_to_openai(ag_response, model_name, request_id):
     if candidates:
         parts = candidates[0].get("content", {}).get("parts", [])
         for part in parts:
-            if (part.get("thought") or part.get("thoughtSignature")) and part.get("text"):
+            if part.get("thought") is True and part.get("text"):
                 reasoning_content += part["text"]
             elif part.get("text"):
                 content += part["text"]
@@ -965,8 +996,12 @@ def antigravity_chunk_to_openai(chunk_data, model_name, request_id, state):
     reasoning = ""
     tool_calls = []
     for part in parts:
-        if (part.get("thought") or part.get("thoughtSignature")) and part.get("text"):
-            reasoning += part["text"]
+        # A part is ONLY internal reasoning when the explicit `thought` flag is true.
+        # `thoughtSignature` is just an opaque checksum Google attaches to REAL answer
+        # parts — treating it as a thought marker silently routes the actual response
+        # into reasoning_content and leaves `content` empty.
+        if part.get("thought") is True:
+            reasoning += part.get("text") or ""
         elif part.get("text"):
             content += part["text"]
         elif part.get("functionCall"):
@@ -1725,7 +1760,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             req = urllib.request.Request(API_ENDPOINT, data=ag_body_json,
                 headers={"Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
-                    "User-Agent": "antigravity/ide/2.1.1 darwin/arm64"})
+                    **ANTIGRAVITY_CLIENT_HEADERS})
             try:
                 resp = urllib.request.urlopen(req, timeout=300)
                 # Auto-clear error state on successful connection
