@@ -1835,6 +1835,51 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 pass
         ag_body, ag_stream = openai_to_antigravity(body, request_headers=self.headers)
 
+        restrict_mode = STRATEGY == "restrict"
+        fallback_models = [m.strip() for m in os.environ.get(
+            "AG_MODEL_FALLBACK", "gemini-3-flash,gemini-2.5-flash").split(",") if m.strip()]
+        model_chain = [model] + [m for m in fallback_models if m != model]
+        last_status, last_body, account = None, "", None
+        for chain_model in model_chain:
+            if chain_model != model:
+                # Same request, next model: the account pool is shared, but the per-minute
+                # budget is per model, so a throttled "high" tier does not block "medium".
+                retry_body = dict(body)
+                retry_body["model"] = chain_model
+                ag_body, ag_stream = openai_to_antigravity(retry_body, request_headers=self.headers)
+                log_event("INFO", f"Model fallback: {model} -> {chain_model}")
+            handled, last_status, last_body, account = self._attempt_pool(
+                ag_body, chain_model, request_id, usage_start, restrict_mode, stream, body)
+            if handled:
+                return
+            # Only throttling/capacity failures are worth another model; a 403 or a malformed
+            # request would fail identically on every model.
+            if last_status not in (429, 500, 502, 503, 504):
+                break
+
+        last_err = (account.last_error if account else None) or str(last_body or "No accounts")
+        track_end(request_id)
+        record_usage(model, 0, 0, 0, "error", (time.time() - usage_start) * 1000)
+        if restrict_mode and last_status:
+            # Surface the real upstream verdict (429/503/403) so the client can back off,
+            # instead of the generic 502 "all attempts failed" wrapper.
+            try:
+                payload = json.loads(last_body)
+            except Exception:
+                payload = {"error": {"message": str(last_body or last_err)[:500],
+                                     "code": last_status}}
+            status = last_status if last_status in (400, 401, 403, 429, 500, 502, 503, 504) else 502
+            headers = {"X-Account-Used": getattr(account, "email", "") or ""}
+            if status in (429, 503):
+                headers["Retry-After"] = "20"
+            self._send_json(status, payload, extra_headers=headers)
+            return
+        self._send_json(502, {"error": {"message": (
+            f"All {MAX_RETRIES} attempts failed on {model} and its fallbacks. Last: {last_err}")}})
+
+    def _attempt_pool(self, ag_body, chain_model, request_id, usage_start, restrict_mode, stream, body):
+        """Try the account pool for ONE model. Returns (handled, status, body, account)."""
+        global _sticky_account_email
         excluded_email = None
         retry_after = 0.0
         # Restrict mode: single attempt, no account hop. The client gets the upstream verdict
@@ -1856,7 +1901,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 account = get_next_account()
             if not account:
                 self._send_json(503, {"error": {"message": "No active accounts"}})
-                return
+                return True, None, "", None
 
             # Inject deterministic session ID into Antigravity request for prompt cache hit
             stable_session_id = resolve_client_session_id(body, account.email)
@@ -1867,7 +1912,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             except:
                 continue
             print(f"  [ACC] {account.email} (attempt {attempt+1})")
-            track_start(request_id, model, account.email)
+            track_start(request_id, chain_model, account.email)
             ag_body_json = json.dumps(ag_body).encode()
             req = urllib.request.Request(API_ENDPOINT, data=ag_body_json,
                 headers={"Authorization": f"Bearer {token}",
@@ -1925,29 +1970,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 continue
 
             if stream:
-                self._handle_stream(resp, model, request_id, account, usage_start)
+                self._handle_stream(resp, chain_model, request_id, account, usage_start)
             else:
-                self._handle_nonstream(resp, model, request_id, account, usage_start)
-            return
+                self._handle_nonstream(resp, chain_model, request_id, account, usage_start)
+            return True, last_status, last_body, account
+        return False, last_status, last_body, account
 
-        last_err = account.last_error if account else "No accounts"
-        track_end(request_id)
-        record_usage(model, 0, 0, 0, "error", (time.time() - usage_start) * 1000)
-        if restrict_mode and last_status:
-            # Surface the real upstream verdict (429/503/403) so the client can back off,
-            # instead of the generic 502 "all attempts failed" wrapper.
-            try:
-                payload = json.loads(last_body)
-            except Exception:
-                payload = {"error": {"message": str(last_body or last_err)[:500],
-                                     "code": last_status}}
-            status = last_status if last_status in (400, 401, 403, 429, 500, 502, 503, 504) else 502
-            headers = {"X-Account-Used": getattr(account, "email", "") or ""}
-            if status in (429, 503):
-                headers["Retry-After"] = str(int(min(max(retry_after or 20, 5), 120)))
-            self._send_json(status, payload, extra_headers=headers)
-            return
-        self._send_json(502, {"error": {"message": f"All {MAX_RETRIES} attempts failed. Last: {last_err}"}})
 
     def _handle_nonstream(self, resp, model, request_id, account, started=0.0):
         raw = resp.read().decode()
