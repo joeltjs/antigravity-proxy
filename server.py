@@ -756,6 +756,35 @@ def openai_to_antigravity(body, request_headers=None):
         messages = system_msgs + head + tail
         print(f"[CTX] ring guard: {original_len} -> {len(messages)} msgs "
               f"(dropped {original_len - len(messages)} from the middle)")
+
+    # Volume guard: message count is a poor proxy for token volume. The newest 200 messages
+    # of an agent session can still be hundreds of thousands of characters, which burns the
+    # per-minute token budget in a single shot and comes back as 429 on every account while
+    # the daily quota still reads ~100%. Keep the newest messages that fit the budget.
+    max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "200000"))
+
+    def _msg_chars(msgs):
+        return sum(len(m.get("content")) for m in msgs if isinstance(m.get("content"), str))
+
+    if max_chars > 0 and _msg_chars(messages) > max_chars:
+        original_chars = _msg_chars(messages)
+        volume_system = [m for m in messages if m.get("role") == "system"]
+        volume_rest = [m for m in messages if m.get("role") != "system"]
+        volume_head = volume_rest[:1] if volume_rest and volume_rest[0].get("role") == "user" else []
+        kept_reversed = []
+        used = _msg_chars(volume_system + volume_head)
+        for msg in reversed(volume_rest[len(volume_head):]):
+            size = len(msg.get("content")) if isinstance(msg.get("content"), str) else 0
+            if used + size > max_chars and kept_reversed:
+                break
+            kept_reversed.append(msg)
+            used += size
+        kept = list(reversed(kept_reversed))
+        while kept and kept[0].get("role") != "user":
+            kept = kept[1:]
+        messages = volume_system + volume_head + kept
+        print(f"[CTX] volume guard: {original_chars} -> {_msg_chars(messages)} chars "
+              f"({len(messages)} msgs, budget {max_chars})")
     model = body.get("model", "gemini-3-flash")
     stream = body.get("stream", False)
     max_tokens = body.get("max_tokens") or 8192
@@ -1811,9 +1840,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     cooldown = 300 if quota_effectively_gone(account) else 60
                     account.rate_limited_until = int(time.time()) + cooldown
                     log_event("WARN", f"Account {account.email} RATE LIMITED (429) - cooldown {cooldown // 60} min, switching account")
+                elif e.code in (500, 502, 503, 504):
+                    # Transient upstream capacity (e.g. MODEL_CAPACITY_EXHAUSTED): a 10-minute
+                    # bench over a capacity crunch that lasts seconds empties the pool fast.
+                    account.rate_limited_until = int(time.time()) + 60
+                    log_event("WARN", f"Account {account.email} UPSTREAM {e.code} - cooldown 1 min, switching account")
                 else:
                     # HTTP 403 or other persistent error: cooldown 10 minutes so sticky advances!
-                    account.rate_limited_until = time.time() + 600
+                    account.rate_limited_until = int(time.time()) + 600
                     log_event("WARN", f"Account {account.email} ERROR ({e.code}) - cooldown 10 min, switching account")
                 
                 # Update global sticky anchor to the fallback account immediately
