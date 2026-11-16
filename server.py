@@ -172,6 +172,23 @@ OAUTH["client_secret"] = os.environ.get("OAUTH_SECRET_KEY") or _ENV_FILE.get("OA
 ACCOUNTS = CONFIG["accounts"]
 STRATEGY = CONFIG.get("strategy", "round-robin")
 MAX_RETRIES = CONFIG.get("max_retries", 3)
+# Stagger between account attempts. Google rejects every request that lands inside the
+# same short throttle window, so firing 3 attempts in the same second burns the whole
+# retry budget on one blip. A short gap lets that window pass.
+ATTEMPT_BACKOFF_BASE = float(os.environ.get("AG_RETRY_BACKOFF_MS", "800")) / 1000.0
+ATTEMPT_BACKOFF_MAX = float(os.environ.get("AG_RETRY_BACKOFF_MAX_MS", "3000")) / 1000.0
+
+
+def quota_effectively_gone(account):
+    """True only when every model on the account is out of quota.
+
+    A 429 with healthy quota is a transient throttle: benching that account for the full
+    5 minutes turns a 30-second upstream blip into a multi-minute outage for the pool.
+    """
+    quota = getattr(account, "quota", None) or {}
+    fractions = [v.get("remainingFraction") for v in quota.values()
+                 if isinstance(v.get("remainingFraction"), (int, float))]
+    return bool(fractions) and max(fractions) <= 0.05
 API_ENDPOINT = CONFIG["api_endpoint"]
 QUOTA_API = "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels"
 OAUTH_SCOPES = CONFIG.get("oauth_scopes",
@@ -1737,7 +1754,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
         ag_body, ag_stream = openai_to_antigravity(body, request_headers=self.headers)
 
         excluded_email = None
+        retry_after = 0.0
         for attempt in range(MAX_RETRIES):
+            if attempt:
+                delay = retry_after or (ATTEMPT_BACKOFF_BASE * attempt)
+                delay = max(0.2, min(delay, ATTEMPT_BACKOFF_MAX))
+                log_event("INFO", f"Retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s")
+                time.sleep(delay)
             if STRATEGY == "sticky" and excluded_email:
                 account = get_fallback_account(excluded_email)
             else:
@@ -1768,6 +1791,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 account.last_error = None
             except urllib.error.HTTPError as e:
                 err_body = e.read().decode()
+                retry_after = 0.0
+                try:
+                    raw_retry_after = e.headers.get("Retry-After") if e.headers else None
+                    if raw_retry_after:
+                        retry_after = max(1.0, min(float(raw_retry_after), 15.0))
+                except (TypeError, ValueError):
+                    retry_after = 0.0
                 account.error_count += 1
                 account.last_error = f"HTTP {e.code}: {err_body[:500]}"
                 print(f"  [ERR] {account.email}: {account.last_error}")
@@ -1776,8 +1806,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     account.access_token = None
                     account.expires_at = 0
                 elif e.code == 429:
-                    account.rate_limited_until = time.time() + 300
-                    log_event("WARN", f"Account {account.email} RATE LIMITED (429) - cooldown 5 min, switching account")
+                    # Real exhaustion -> long cooldown; transient throttle with quota intact
+                    # -> short cooldown so one blip cannot bench the whole pool.
+                    cooldown = 300 if quota_effectively_gone(account) else 60
+                    account.rate_limited_until = int(time.time()) + cooldown
+                    log_event("WARN", f"Account {account.email} RATE LIMITED (429) - cooldown {cooldown // 60} min, switching account")
                 else:
                     # HTTP 403 or other persistent error: cooldown 10 minutes so sticky advances!
                     account.rate_limited_until = time.time() + 600
