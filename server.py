@@ -769,6 +769,34 @@ def openai_to_antigravity(body, request_headers=None):
     # per-minute token budget in a single shot and comes back as 429 on every account while
     # the daily quota still reads ~100%. Keep the newest messages that fit the budget.
     max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "200000"))
+    # Cap a single message before accumulating: one giant tool result (a whole file dump) used
+    # to force the window down to two messages, throwing away the entire conversation. Keep the
+    # message but trim its payload head+tail, the way _compress_rtk does for shell output.
+    max_msg_chars = int(os.environ.get("AG_MAX_MESSAGE_CHARS", "40000"))
+
+    def _shrink_text(value, cap):
+        if not isinstance(value, str) or len(value) <= cap:
+            return value
+        head = int(cap * 0.6)
+        tail = max(0, cap - head)
+        return (value[:head]
+                + f"\n\n[... dipangkas proxy: {len(value) - cap} karakter dari pesan ini ...]\n\n"
+                + (value[-tail:] if tail else ""))
+
+    def _shrink_message(msg):
+        """Trim oversized text and tool-call arguments in place on a copy."""
+        shrunk = dict(msg)
+        shrunk["content"] = _shrink_text(shrunk.get("content"), max_msg_chars)
+        if isinstance(shrunk.get("tool_calls"), list):
+            calls = []
+            for call in shrunk["tool_calls"]:
+                call = dict(call)
+                fn = dict(call.get("function") or {})
+                fn["arguments"] = _shrink_text(fn.get("arguments"), max_msg_chars)
+                call["function"] = fn
+                calls.append(call)
+            shrunk["tool_calls"] = calls
+        return shrunk
 
     def _msg_chars(msgs):
         # Measure the WHOLE message, not just `content`: an agent session carries most of its
@@ -782,6 +810,12 @@ def openai_to_antigravity(body, request_headers=None):
             except Exception:
                 total += len(str(m))
         return total
+
+    if max_msg_chars > 0:
+        oversized = [m for m in messages if _msg_chars([m]) > max_msg_chars]
+        if oversized:
+            messages = [_shrink_message(m) if _msg_chars([m]) > max_msg_chars else m for m in messages]
+            print(f"[CTX] message guard: {len(oversized)} pesan besar dipangkas ke <= {max_msg_chars} chars")
 
     if max_chars > 0 and _msg_chars(messages) > max_chars:
         original_chars = _msg_chars(messages)
