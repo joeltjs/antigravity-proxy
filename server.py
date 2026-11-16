@@ -175,8 +175,8 @@ MAX_RETRIES = CONFIG.get("max_retries", 3)
 # Stagger between account attempts. Google rejects every request that lands inside the
 # same short throttle window, so firing 3 attempts in the same second burns the whole
 # retry budget on one blip. A short gap lets that window pass.
-ATTEMPT_BACKOFF_BASE = float(os.environ.get("AG_RETRY_BACKOFF_MS", "800")) / 1000.0
-ATTEMPT_BACKOFF_MAX = float(os.environ.get("AG_RETRY_BACKOFF_MAX_MS", "3000")) / 1000.0
+ATTEMPT_BACKOFF_BASE = float(os.environ.get("AG_RETRY_BACKOFF_MS", "2500")) / 1000.0
+ATTEMPT_BACKOFF_MAX = float(os.environ.get("AG_RETRY_BACKOFF_MAX_MS", "8000")) / 1000.0
 
 
 def quota_effectively_gone(account):
@@ -768,11 +768,11 @@ def openai_to_antigravity(body, request_headers=None):
     # of an agent session can still be hundreds of thousands of characters, which burns the
     # per-minute token budget in a single shot and comes back as 429 on every account while
     # the daily quota still reads ~100%. Keep the newest messages that fit the budget.
-    max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "200000"))
+    max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "120000"))
     # Cap a single message before accumulating: one giant tool result (a whole file dump) used
     # to force the window down to two messages, throwing away the entire conversation. Keep the
     # message but trim its payload head+tail, the way _compress_rtk does for shell output.
-    max_msg_chars = int(os.environ.get("AG_MAX_MESSAGE_CHARS", "40000"))
+    max_msg_chars = int(os.environ.get("AG_MAX_MESSAGE_CHARS", "25000"))
 
     def _shrink_text(value, cap):
         if not isinstance(value, str) or len(value) <= cap:
@@ -783,10 +783,40 @@ def openai_to_antigravity(body, request_headers=None):
                 + f"\n\n[... dipangkas proxy: {len(value) - cap} karakter dari pesan ini ...]\n\n"
                 + (value[-tail:] if tail else ""))
 
+    def _shrink_parts(parts, cap):
+        """Trim a multimodal content list: keep text (shrunk), drop heavy media payloads.
+
+        An image part carries megabytes of base64 and cannot be shrunk usefully, so it becomes
+        a short placeholder. Dropping them is what keeps a screenshot-heavy session sendable.
+        """
+        out = []
+        budget = cap
+        for part in parts:
+            if not isinstance(part, dict):
+                out.append(part)
+                continue
+            kind = part.get("type")
+            if kind in ("text", "input_text") or "text" in part:
+                text = _shrink_text(part.get("text"), max(200, budget))
+                budget = max(200, budget - len(text or ""))
+                out.append({**part, "text": text})
+            elif kind in ("image_url", "input_image", "image"):
+                out.append({"type": "text",
+                            "text": "[gambar dilampirkan — dihapus proxy agar muat kuota]"})
+            else:
+                blob = json.dumps(part, default=str)
+                out.append(part if len(blob) <= 2000 else
+                           {"type": "text", "text": "[lampiran besar dihapus proxy]"})
+        return out
+
     def _shrink_message(msg):
-        """Trim oversized text and tool-call arguments in place on a copy."""
+        """Trim oversized text, multimodal parts and tool-call arguments on a copy."""
         shrunk = dict(msg)
-        shrunk["content"] = _shrink_text(shrunk.get("content"), max_msg_chars)
+        content = shrunk.get("content")
+        if isinstance(content, list):
+            shrunk["content"] = _shrink_parts(content, max_msg_chars)
+        else:
+            shrunk["content"] = _shrink_text(content, max_msg_chars)
         if isinstance(shrunk.get("tool_calls"), list):
             calls = []
             for call in shrunk["tool_calls"]:
@@ -1837,7 +1867,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         restrict_mode = STRATEGY == "restrict"
         fallback_models = [m.strip() for m in os.environ.get(
-            "AG_MODEL_FALLBACK", "gemini-3-flash,gemini-2.5-flash").split(",") if m.strip()]
+            "AG_MODEL_FALLBACK", "gemini-3-flash").split(",") if m.strip()]
         model_chain = [model] + [m for m in fallback_models if m != model]
         last_status, last_body, account = None, "", None
         for chain_model in model_chain:
