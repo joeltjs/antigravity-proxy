@@ -172,6 +172,11 @@ OAUTH["client_secret"] = os.environ.get("OAUTH_SECRET_KEY") or _ENV_FILE.get("OA
 ACCOUNTS = CONFIG["accounts"]
 STRATEGY = CONFIG.get("strategy", "round-robin")
 MAX_RETRIES = CONFIG.get("max_retries", 3)
+# Soft client-side RPM ceiling per account. Google's per-minute limit is the real cause of
+# HTTP 429 RESOURCE_EXHAUSTED while the daily quota still shows ~100%: a parallel burst from
+# the IDE saturates one account's window. Staying just under it and rotating across the pool
+# converts those hard 429s into smooth throughput. Tune with AG_SOFT_RPM_LIMIT.
+SOFT_RPM_LIMIT = int(os.environ.get("AG_SOFT_RPM_LIMIT") or CONFIG.get("soft_rpm_limit") or 8)
 # Stagger between account attempts. Google rejects every request that lands inside the
 # same short throttle window, so firing 3 attempts in the same second burns the whole
 # retry budget on one blip. A short gap lets that window pass.
@@ -445,6 +450,21 @@ class AccountState:
         self.rate_limited_until = 0
         self.quota = {}  # model -> {remainingFraction, resetTime}
         self.quota_fetched_at = 0
+        # Rolling window of recent request timestamps (epoch seconds) used by the soft RPM
+        # guard to spread IDE bursts across the pool before Google's per-minute limit trips.
+        self.recent_requests = []
+
+    def rpm_used(self, window_sec=60.0):
+        """Count requests served in the trailing window."""
+        cutoff = time.time() - window_sec
+        self.recent_requests = [t for t in self.recent_requests if t >= cutoff]
+        return len(self.recent_requests)
+
+    def note_request(self):
+        """Record that this account just served a request."""
+        self.recent_requests.append(time.time())
+        if len(self.recent_requests) > 500:
+            self.recent_requests = self.recent_requests[-250:]
 
     def get_token(self):
         with self.lock:
@@ -559,6 +579,24 @@ def get_next_account():
 
             current_sticky = next((a for a in available if a.email == _sticky_account_email), None)
             if current_sticky and now >= current_sticky.rate_limited_until:
+                # Soft RPM guard: sticky keeps prompt-cache warm, but a parallel burst from
+                # the IDE would hammer ONE account into Google's per-minute limit while the
+                # rest of the pool idles (observed: 45x HTTP 429 in a single minute with 84%
+                # of the daily quota still intact). If the anchor is already saturated in the
+                # trailing window, rotate to the next healthy account instead of 429-ing.
+                if current_sticky.rpm_used() < SOFT_RPM_LIMIT:
+                    current_sticky.note_request()
+                    return current_sticky
+                for acc in available:
+                    if acc is current_sticky:
+                        continue
+                    if now >= acc.rate_limited_until and acc.rpm_used() < SOFT_RPM_LIMIT:
+                        _sticky_account_email = acc.email
+                        acc.note_request()
+                        return acc
+                # Whole pool is saturated: keep the anchor (client will throttle) but do
+                # not pretend another account is free.
+                current_sticky.note_request()
                 return current_sticky
 
             # Fallback & migrate sticky anchor to next healthy account
@@ -673,6 +711,33 @@ def _sanitize_fn_name(name):
     return s[:64]
 
 
+def _trim_schema_descriptions(schema, cap):
+    """Recursively shorten `description` strings inside a JSON Schema.
+
+    Tool/parameter descriptions are documentation for the model, not behaviour — the
+    function name, types and required list carry the contract. Agent clients ship dozens of
+    verbose schemas, which cost thousands of prompt tokens on every single request and push
+    the per-account per-minute budget over the edge (Google answers 429 RESOURCE_EXHAUSTED
+    even while the daily quota reads ~100%). Capping them keeps tool use working.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out = {}
+    for k, v in schema.items():
+        if k == "description" and isinstance(v, str) and len(v) > cap:
+            cut = v[:cap]
+            if " " in cut:
+                cut = cut.rsplit(" ", 1)[0]
+            out[k] = cut + "…"
+        elif isinstance(v, dict):
+            out[k] = _trim_schema_descriptions(v, cap)
+        elif isinstance(v, list):
+            out[k] = [_trim_schema_descriptions(i, cap) for i in v]
+        else:
+            out[k] = v
+    return out
+
+
 def _clean_schema_for_gemini(schema):
     """Recursively clean JSON Schema for Gemini/Antigravity API:
     Only allow fields supported by Google CloudCode Schema proto:
@@ -744,14 +809,88 @@ def _compress_rtk(text):
     return "\n".join(head) + f"\n\n[... RTK: {omitted} lines of noisy build/shell output truncated ...]\n\n" + "\n".join(tail)
 
 
+def _flatten_old_history(messages, keep_recent, transcript_budget):
+    """Collapse the older half of a long conversation into ONE transcript message.
+
+    Why this exists: the previous ring guard solved Google's message-count limit by DELETING
+    the middle of the conversation, which destroyed continuity and made the model hallucinate
+    ("halu"). Deleting was never necessary — Google's abuse detector reacts to MESSAGE COUNT
+    (a ~850-message burst earned a 403 TOS_VIOLATION) while the context window itself is large.
+    Flattening keeps every word of the old turns but presents them as a transcript, so the
+    count drops to a handful while the meaning survives.
+
+    The transcript is capped by character budget; when it overflows, the OLDEST lines are
+    shortened first so the most recent context stays verbatim.
+    """
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    convo = [m for m in messages if m.get("role") != "system"]
+    if len(convo) <= keep_recent:
+        return messages
+
+    old, recent = convo[:-keep_recent], convo[-keep_recent:]
+    while recent and recent[0].get("role") != "user":
+        recent = recent[1:]
+
+    lines = []
+    for m in old:
+        role = m.get("role", "user")
+        content = m.get("content")
+        if isinstance(content, list):
+            content = " ".join(p.get("text", "") for p in content
+                               if isinstance(p, dict) and p.get("text"))
+        if not isinstance(content, str):
+            content = ""
+        if m.get("tool_calls"):
+            names = ", ".join((tc.get("function") or {}).get("name", "?") for tc in m["tool_calls"])
+            content += f"\n[panggil tool: {names}]"
+        content = " ".join(content.split())
+        if not content:
+            continue
+        label = {"user": "PENGGUNA", "assistant": "ASISTEN"}.get(role, role.upper())
+        lines.append(f"[{label}] {content}")
+
+    if not lines:
+        return messages
+
+    header = "=== RIWAYAT PERCAKAPAN SEBELUMNYA (transkrip, jangan diulang) ==="
+    footer = "=== AKHIR RIWAYAT - lanjutkan percakapan dari sini ==="
+
+    # Budget trim: shorten the oldest lines first, keep the newest ones intact.
+    body_len = sum(len(x) + 2 for x in lines)
+    if body_len > transcript_budget:
+        per_line = max(160, transcript_budget // max(1, len(lines)))
+        trimmed = []
+        for line in lines:
+            if len(line) > per_line:
+                trimmed.append(line[:per_line].rsplit(" ", 1)[0] + " [...]")
+            else:
+                trimmed.append(line)
+        lines = trimmed
+
+    transcript = header + "\n\n".join(lines) + "\n" + footer
+    out = system_msgs + [
+        {"role": "user", "content": transcript, "_proxy_transcript": True},
+        {"role": "assistant", "content": "Baik, riwayat sudah saya baca. Lanjutkan."},
+    ] + recent
+    print(f"[CTX] flatten: {len(messages)} -> {len(out)} msgs "
+          f"({len(old)} pesan lama jadi 1 transkrip {len(transcript)} chars, isi dipertahankan)")
+    return out
+
+
 def openai_to_antigravity(body, request_headers=None):
     messages = body.get("messages", [])
+    # Flatten BEFORE any destructive guard so long sessions lose message COUNT, not content.
+    flatten_above = int(os.environ.get("AG_FLATTEN_ABOVE", "300"))
+    flatten_keep = int(os.environ.get("AG_FLATTEN_KEEP_RECENT", "150"))
+    flatten_budget = int(os.environ.get("AG_FLATTEN_BUDGET_CHARS", "150000"))
+    if len(messages) > flatten_above:
+        messages = _flatten_old_history(messages, flatten_keep, flatten_budget)
     # Context safety ring: Google's CloudCode abuse detector suspends whole accounts
     # when a single sticky account receives very large conversation bursts (msgs 1000+).
     # Keep system prompt + first user turn + the newest window, and align the window to
     # a clean user turn so no functionCall/functionResponse pair is left dangling.
-    max_msgs = int(os.environ.get("AG_MAX_MESSAGES", "400"))
-    keep_recent = int(os.environ.get("AG_KEEP_RECENT_MESSAGES", "200"))
+    max_msgs = int(os.environ.get("AG_MAX_MESSAGES", "700"))
+    keep_recent = int(os.environ.get("AG_KEEP_RECENT_MESSAGES", "350"))
     if len(messages) > max_msgs:
         original_len = len(messages)
         system_msgs = [m for m in messages if m.get("role") == "system"]
@@ -768,11 +907,95 @@ def openai_to_antigravity(body, request_headers=None):
     # of an agent session can still be hundreds of thousands of characters, which burns the
     # per-minute token budget in a single shot and comes back as 429 on every account while
     # the daily quota still reads ~100%. Keep the newest messages that fit the budget.
-    max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "120000"))
+    max_chars = int(os.environ.get("AG_MAX_PROMPT_CHARS", "420000"))
     # Cap a single message before accumulating: one giant tool result (a whole file dump) used
     # to force the window down to two messages, throwing away the entire conversation. Keep the
     # message but trim its payload head+tail, the way _compress_rtk does for shell output.
-    max_msg_chars = int(os.environ.get("AG_MAX_MESSAGE_CHARS", "25000"))
+    max_msg_chars = int(os.environ.get("AG_MAX_MESSAGE_CHARS", "40000"))
+
+    # Vision support: dropping every image made the proxy blind for screenshot sessions.
+    # Keep the newest screenshots (re-encoded small enough to fit the guards) and replace
+    # only the older ones with a placeholder.
+    img_keep = int(os.environ.get("AG_IMG_KEEP", "2"))
+    img_max_px = int(os.environ.get("AG_IMG_MAX_PX", "1024"))
+    img_quality = int(os.environ.get("AG_IMG_QUALITY", "70"))
+    img_max_chars = int(os.environ.get("AG_IMG_MAX_CHARS", "200000"))
+
+    def _reencode_image_url(url):
+        """Downscale a base64 data: URL so the picture still reaches Gemini.
+
+        A phone screenshot is 150-400 KB of PNG; base64 makes that 200-550k chars, so every
+        image message tripped the per-message cap and every picture was thrown away. Re-encoding
+        to a 1024px JPEG keeps it readable at a fraction of the payload. Returns None when it
+        is still too big to send.
+        """
+        try:
+            import base64 as _b64, io as _io
+            if not isinstance(url, str) or not url.startswith("data:"):
+                return None
+            _, payload = url.split(",", 1)
+            raw = _b64.b64decode(payload)
+            if len(payload) <= img_max_chars and len(raw) <= 1_200_000:
+                return url  # already cheap enough, keep the original bytes untouched
+            from PIL import Image
+            img = Image.open(_io.BytesIO(raw))
+            if img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            # Shrink progressively: one pass is not enough for heavy screenshots, and giving up
+            # silently is how vision used to disappear completely.
+            best = None
+            for px in (img_max_px, int(img_max_px * 0.75), int(img_max_px * 0.55)):
+                for q in (img_quality, max(35, img_quality - 15), max(25, img_quality - 30)):
+                    cand = img.copy()
+                    cand.thumbnail((px, px))
+                    buf = _io.BytesIO()
+                    cand.save(buf, format="JPEG", quality=q, optimize=True)
+                    out = _b64.b64encode(buf.getvalue()).decode()
+                    if len(out) <= img_max_chars:
+                        print(f"[CTX] image re-encoded: {len(payload)} -> {len(out)} b64 chars "
+                              f"({cand.size[0]}x{cand.size[1]} jpeg q{q})")
+                        return "data:image/jpeg;base64," + out
+                    best = len(out)
+            print(f"[CTX] image too heavy even after re-encode ({best} > {img_max_chars} chars)")
+            return None
+        except Exception as e:
+            print(f"[CTX] image re-encode failed ({e}); image dropped")
+            return None
+
+    def _part_image_url(part):
+        if part.get("type") == "image_url":
+            return (part.get("image_url") or {}).get("url", "")
+        return part.get("data") or (part.get("image_url") or {}).get("url", "")
+
+    def _is_image_part(part):
+        return isinstance(part, dict) and part.get("type") in ("image_url", "input_image", "image")
+
+    # Flag the newest image-bearing messages BEFORE the guards run, so their picture survives.
+    kept_images = 0
+    for idx in range(len(messages) - 1, -1, -1):
+        if kept_images >= img_keep:
+            break
+        msg = messages[idx]
+        content = msg.get("content")
+        if not isinstance(content, list) or not any(_is_image_part(p) for p in content):
+            continue
+        new_parts = []
+        kept_here = False
+        for part in content:
+            if _is_image_part(part):
+                fixed = _reencode_image_url(_part_image_url(part))
+                if fixed:
+                    kept_here = True
+                    # Normalise to image_url: the translator only emits inlineData for that type.
+                    new_parts.append({"type": "image_url", "image_url": {"url": fixed}})
+                else:
+                    new_parts.append({"type": "text",
+                                      "text": "[gambar dihapus proxy: terlalu besar untuk dikirim]"})
+            else:
+                new_parts.append(part)
+        if kept_here:
+            messages[idx] = {**msg, "content": new_parts, "_proxy_vision": True}
+            kept_images += 1
 
     def _shrink_text(value, cap):
         if not isinstance(value, str) or len(value) <= cap:
@@ -783,11 +1006,12 @@ def openai_to_antigravity(body, request_headers=None):
                 + f"\n\n[... dipangkas proxy: {len(value) - cap} karakter dari pesan ini ...]\n\n"
                 + (value[-tail:] if tail else ""))
 
-    def _shrink_parts(parts, cap):
+    def _shrink_parts(parts, cap, keep_vision=False):
         """Trim a multimodal content list: keep text (shrunk), drop heavy media payloads.
 
         An image part carries megabytes of base64 and cannot be shrunk usefully, so it becomes
         a short placeholder. Dropping them is what keeps a screenshot-heavy session sendable.
+        The newest screenshots are flagged `_proxy_vision` and pass through untouched.
         """
         out = []
         budget = cap
@@ -801,6 +1025,9 @@ def openai_to_antigravity(body, request_headers=None):
                 budget = max(200, budget - len(text or ""))
                 out.append({**part, "text": text})
             elif kind in ("image_url", "input_image", "image"):
+                if keep_vision and part.get("image_url"):
+                    out.append(part)
+                    continue
                 out.append({"type": "text",
                             "text": "[gambar dilampirkan — dihapus proxy agar muat kuota]"})
             else:
@@ -809,12 +1036,12 @@ def openai_to_antigravity(body, request_headers=None):
                            {"type": "text", "text": "[lampiran besar dihapus proxy]"})
         return out
 
-    def _shrink_message(msg):
+    def _shrink_message(msg, keep_vision=False):
         """Trim oversized text, multimodal parts and tool-call arguments on a copy."""
         shrunk = dict(msg)
         content = shrunk.get("content")
         if isinstance(content, list):
-            shrunk["content"] = _shrink_parts(content, max_msg_chars)
+            shrunk["content"] = _shrink_parts(content, max_msg_chars, keep_vision)
         else:
             shrunk["content"] = _shrink_text(content, max_msg_chars)
         if isinstance(shrunk.get("tool_calls"), list):
@@ -842,9 +1069,13 @@ def openai_to_antigravity(body, request_headers=None):
         return total
 
     if max_msg_chars > 0:
-        oversized = [m for m in messages if _msg_chars([m]) > max_msg_chars]
+        # The flattened transcript is deliberately large: it is the compressed memory of the
+        # whole session. Shrinking it would delete the very context the flatten step saved.
+        oversized = [m for m in messages
+                     if not m.get("_proxy_transcript") and _msg_chars([m]) > max_msg_chars]
         if oversized:
-            messages = [_shrink_message(m) if _msg_chars([m]) > max_msg_chars else m for m in messages]
+            messages = [_shrink_message(m, keep_vision=bool(m.get("_proxy_vision")))
+                        if _msg_chars([m]) > max_msg_chars else m for m in messages]
             print(f"[CTX] message guard: {len(oversized)} pesan besar dipangkas ke <= {max_msg_chars} chars")
 
     if max_chars > 0 and _msg_chars(messages) > max_chars:
@@ -853,7 +1084,11 @@ def openai_to_antigravity(body, request_headers=None):
         volume_rest = [m for m in messages if m.get("role") != "system"]
         volume_head = volume_rest[:1] if volume_rest and volume_rest[0].get("role") == "user" else []
         kept_reversed = []
-        used = _msg_chars(volume_system + volume_head)
+        # The flattened transcript is prioritised: it carries the compressed memory of the
+        # whole session, so it is counted first and never evicted by the newest-messages loop.
+        volume_transcript = [m for m in volume_rest if m.get("_proxy_transcript")]
+        volume_rest = [m for m in volume_rest if not m.get("_proxy_transcript")]
+        used = _msg_chars(volume_system + volume_head + volume_transcript)
         for msg in reversed(volume_rest[len(volume_head):]):
             size = _msg_chars([msg])
             if used + size > max_chars and kept_reversed:
@@ -861,9 +1096,17 @@ def openai_to_antigravity(body, request_headers=None):
             kept_reversed.append(msg)
             used += size
         kept = list(reversed(kept_reversed))
-        while kept and kept[0].get("role") != "user":
-            kept = kept[1:]
-        messages = volume_system + volume_head + kept
+        # Gemini requires the conversation to start with a user turn. Stripping leading
+        # tool/assistant messages is correct, but doing it unconditionally with
+        # `kept = kept[1:]` can empty the whole history (observed: 114 msgs -> 2 msgs),
+        # which silently destroys all context and makes the model answer as if blind.
+        # Keep the real messages and only prepend a synthetic user turn when needed.
+        if kept and kept[0].get("role") != "user":
+            messages = volume_system + volume_head + volume_transcript + [
+                {"role": "user", "parts": [{"text": "[lanjutan percakapan sebelumnya]"}]}
+            ] + kept
+        else:
+            messages = volume_system + volume_head + volume_transcript + kept
         print(f"[CTX] volume guard: {original_chars} -> {_msg_chars(messages)} chars "
               f"({len(messages)} msgs, budget {max_chars})")
     model = body.get("model", "gemini-3-flash")
@@ -1055,18 +1298,43 @@ def openai_to_antigravity(body, request_headers=None):
         if max_tokens <= budget:
             gen_config["maxOutputTokens"] = budget + 4096
     tools = []
+    # Tool schemas are a fixed token tax on EVERY request. An agent client like Hermes ships
+    # 34 functions (~71 KB, ~18k tokens) before a single word of conversation, which competes
+    # with history for the per-account per-minute budget. Trimming the prose out of
+    # descriptions keeps function calling intact (name + params still fully present) while
+    # removing the bulk. Disable with AG_TOOL_DESC_CHARS=0.
+    tool_desc_cap = int(os.environ.get("AG_TOOL_DESC_CHARS", "600"))
     for tool in body.get("tools", []):
         if tool.get("type") == "function":
             fn = tool.get("function", {})
             raw_params = fn.get("parameters", {"type": "object", "properties": {}})
             cleaned_params = _clean_schema_for_gemini(raw_params)
+            if tool_desc_cap > 0:
+                cleaned_params = _trim_schema_descriptions(cleaned_params, tool_desc_cap)
+            desc = fn.get("description", "") or ""
+            if tool_desc_cap > 0 and len(desc) > tool_desc_cap:
+                desc = desc[:tool_desc_cap].rsplit(" ", 1)[0] + "…"
             tools.append({"functionDeclarations": [{
                 "name": _sanitize_fn_name(fn.get("name", "")),
-                "description": fn.get("description", ""),
+                "description": desc,
                 "parameters": cleaned_params}]})
+    # The Antigravity backend answers 429 RESOURCE_EXHAUSTED when a large prompt arrives in
+    # the dedicated `systemInstruction` field, even though the daily quota still reads ~100%
+    # and the identical text passes when sent as an ordinary conversation turn. Verified by
+    # isolating each field: systemInstruction+thinking => 429, systemInstruction+sessionId =>
+    # 429, thinking+sessionId => 200. Folding the system prompt into a leading user/model pair
+    # keeps the same semantics and gets a 200. Set AG_SYS_AS_TURN=0 to restore the old shape.
+    sys_as_turn = os.environ.get("AG_SYS_AS_TURN", "1") != "0"
     ag_request = {"model": ag_model, "userAgent": "antigravity",
         "request": {"contents": contents, "generationConfig": gen_config}}
-    if system_instruction: ag_request["request"]["systemInstruction"] = system_instruction
+    if system_instruction:
+        if sys_as_turn and system_instruction.get("parts"):
+            sys_text = "".join(p.get("text", "") for p in system_instruction["parts"])
+            if sys_text.strip():
+                contents.insert(0, {"role": "user", "parts": [{"text": sys_text}]})
+                contents.insert(1, {"role": "model", "parts": [{"text": "Understood."}]})
+        else:
+            ag_request["request"]["systemInstruction"] = system_instruction
     if tools: ag_request["request"]["tools"] = tools
     return ag_request, stream
 
@@ -1855,6 +2123,19 @@ class ProxyHandler(BaseHTTPRequestHandler):
         request_id = f"chatcmpl-{int(time.time()*1000)}"
         usage_start = time.time()  # for usage stats; never affects the request
         print(f"\n[REQ] model={model} stream={stream} msgs={len(body.get('messages',[]))} keys={sorted(body.keys())}")
+        # Payload size matters: Google returns 429 RESOURCE_EXHAUSTED (not 400) for requests
+        # whose prompt blows past the per-account token budget, so record the dimensions that
+        # actually drive it — otherwise a big-tools client failure looks like an empty quota.
+        try:
+            _tools = body.get("tools") or []
+            _msgs = body.get("messages") or []
+            _body_kb = len(json.dumps(body)) / 1024
+            _tools_kb = len(json.dumps(_tools)) / 1024
+            _msg_kb = len(json.dumps(_msgs)) / 1024
+            print(f"[SIZE] body={_body_kb:.1f}KB tools={len(_tools)} ({_tools_kb:.1f}KB) "
+                  f"messages={_msg_kb:.1f}KB max_tokens={body.get('max_tokens')}")
+        except Exception:
+            pass
         # NOTE: debug dump ke /tmp/last_req.json DIHAPUS — request body bisa
         # berisi data sensitif (prompt, tool calls). Enable via env DEBUG_DUMP=1.
         if os.environ.get("DEBUG_DUMP") == "1":
@@ -2153,7 +2434,13 @@ def main():
                 if not acc.disabled:
                     acc.fetch_quota()
     threading.Thread(target=_quota_loop, daemon=True).start()
-    server = ThreadingHTTPServer((HOST, PORT), ProxyHandler)
+    class _BurstServer(ThreadingHTTPServer):
+        # Default backlog is 5, so an IDE burst (40+ parallel tool calls) overflows the
+        # accept queue and the client sees ConnectionResetError instead of a response.
+        request_queue_size = 256
+        daemon_threads = True
+
+    server = _BurstServer((HOST, PORT), ProxyHandler)
     server.daemon_threads = True
     print(f"\n[SERVER] Listening on {HOST}:{PORT}")
     print(f"[SERVER] Dashboard: http://localhost:{PORT}/")
