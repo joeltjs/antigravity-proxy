@@ -696,6 +696,7 @@ FULL_MODEL_CATALOG = [
     {"id": "gemini-3.8-flash-high", "display": "Gemini 3.8 Flash (High)", "kind": "chat"},
     {"id": "gemini-3.8-flash-medium", "display": "Gemini 3.8 Flash (Medium)", "kind": "chat"},
     {"id": "gemini-3.8-flash-tiered", "display": "Gemini 3.8 Flash (Tiered)", "kind": "chat"},
+    {"id": "gemini-4-hydrogen-sonar", "display": "Gemini 4 Hydrogen (Sonar)", "kind": "chat"},
     {"id": "claude-sonnet-4-6", "display": "Claude Sonnet 4.6 (Thinking)", "kind": "chat"},
     {"id": "claude-opus-4-6-thinking", "display": "Claude Opus 4.6 (Thinking)", "kind": "chat"},
     {"id": "gemini-2.5-flash", "display": "Gemini 2.5 Flash", "kind": "chat"},
