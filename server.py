@@ -681,6 +681,10 @@ MODEL_MAP = {
     "gemini-3.8-flash-high": "gemini-3.8-flash-tiered",
     "gemini-3.8-flash-medium": "gemini-3.8-flash-tiered",
 
+    # Gemini 4 "Hydrogen" — upstream accepts the id as-is (no mapping needed), listed here so
+    # it shows up in /v1/models and therefore in client model pickers (Kilo Code, 9router).
+    "gemini-4-hydrogen-sonar": "gemini-4-hydrogen-sonar",
+
     # Claude Series: thinking enabled natively
     "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
     "claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
@@ -899,8 +903,12 @@ def _flatten_old_history(messages, keep_recent, transcript_budget):
 def openai_to_antigravity(body, request_headers=None):
     messages = body.get("messages", [])
     # Flatten BEFORE any destructive guard so long sessions lose message COUNT, not content.
-    flatten_above = int(os.environ.get("AG_FLATTEN_ABOVE", "300"))
-    flatten_keep = int(os.environ.get("AG_FLATTEN_KEEP_RECENT", "150"))
+    # Context guards stay, but they must not fire during ordinary agent work. The old
+    # thresholds (flatten at 300, ring guard at 700) sanitised healthy Kilo Code sessions;
+    # these defaults only step in when the message count approaches the range that Google's
+    # abuse filter flagged (~850 messages = 403 TOS_VIOLATION).
+    flatten_above = int(os.environ.get("AG_FLATTEN_ABOVE", "600"))
+    flatten_keep = int(os.environ.get("AG_FLATTEN_KEEP_RECENT", "300"))
     flatten_budget = int(os.environ.get("AG_FLATTEN_BUDGET_CHARS", "150000"))
     if len(messages) > flatten_above:
         messages = _flatten_old_history(messages, flatten_keep, flatten_budget)
@@ -908,16 +916,20 @@ def openai_to_antigravity(body, request_headers=None):
     # when a single sticky account receives very large conversation bursts (msgs 1000+).
     # Keep system prompt + first user turn + the newest window, and align the window to
     # a clean user turn so no functionCall/functionResponse pair is left dangling.
-    max_msgs = int(os.environ.get("AG_MAX_MESSAGES", "700"))
-    keep_recent = int(os.environ.get("AG_KEEP_RECENT_MESSAGES", "350"))
+    max_msgs = int(os.environ.get("AG_MAX_MESSAGES", "800"))
+    keep_recent = int(os.environ.get("AG_KEEP_RECENT_MESSAGES", "500"))
     if len(messages) > max_msgs:
         original_len = len(messages)
         system_msgs = [m for m in messages if m.get("role") == "system"]
         non_system = [m for m in messages if m.get("role") != "system"]
         head = non_system[:1] if non_system and non_system[0].get("role") == "user" else []
         tail = non_system[-keep_recent:]
-        while tail and tail[0].get("role") != "user":
+        # Same trap as the flatten guard: stripping until a "user" turn empties the window in
+        # agent sessions (assistant/tool tail only). Drop orphan tool results only, keep a floor.
+        while tail and tail[0].get("role") == "tool":
             tail = tail[1:]
+        if len(tail) < 8:
+            tail = non_system[-min(len(non_system), 16):]
         messages = system_msgs + head + tail
         print(f"[CTX] ring guard: {original_len} -> {len(messages)} msgs "
               f"(dropped {original_len - len(messages)} from the middle)")
@@ -1386,10 +1398,18 @@ def antigravity_to_openai(ag_response, model_name, request_id):
     # Agent clients (Kilo Code, Cline, Roo) key off this to dispatch the tool; sending "stop"
     # makes them think the turn produced no action, so they re-send the same prompt forever —
     # the visible symptom is an endless "I'm thinking through how to approach this".
+    if tool_calls:
+        openai_finish = "tool_calls"
+    elif not content:
+        # Empty turn is never a legitimate "stop": either the budget ran out while the model
+        # was thinking, or the candidate was truncated. Report "length" so the client retries
+        # with more room instead of re-sending the identical prompt (silent loop).
+        openai_finish = "length"
+    else:
+        openai_finish = "stop"
     return {"id": request_id, "object": "chat.completion", "created": int(time.time()),
         "model": model_name,
-        "choices": [{"index": 0, "message": message,
-                     "finish_reason": "tool_calls" if tool_calls else "stop"}],
+        "choices": [{"index": 0, "message": message, "finish_reason": openai_finish}],
         "usage": {"prompt_tokens": usage.get("promptTokenCount", 0),
             "completion_tokens": usage.get("candidatesTokenCount", 0),
             "total_tokens": usage.get("totalTokenCount", 0),
@@ -1431,6 +1451,12 @@ def antigravity_chunk_to_openai(chunk_data, model_name, request_id, state):
                     "arguments": json.dumps(fc.get("args", {}))}})
     if reasoning: delta["reasoning_content"] = reasoning
     if content: delta["content"] = content
+    if reasoning or content:
+        # Track whether the turn produced anything the client can use. A reasoning-only turn
+        # (thinking models such as gemini-4-hydrogen-sonar exhaust max_tokens while thinking)
+        # arrives as an empty "stop" and agent clients just re-send the prompt — a silent loop.
+        state["content_chars"] = state.get("content_chars", 0) + len(content)
+        state["reasoning_chars"] = state.get("reasoning_chars", 0) + len(reasoning)
     if tool_calls:
         delta["tool_calls"] = tool_calls
         state.setdefault("tool_calls", []).extend(tool_calls)
@@ -2394,7 +2420,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             break
                     except json.JSONDecodeError:
                         break
-            final_finish = "tool_calls" if state.get("tool_calls") else "stop"
+            if state.get("tool_calls"):
+                final_finish = "tool_calls"
+            elif not state.get("content_chars"):
+                # Nothing usable reached the client (thinking ate the budget / truncation).
+                # "length" lets the agent retry with more room; "stop" makes it loop silently.
+                final_finish = "length"
+            else:
+                final_finish = "stop"
             final = {"id": request_id, "object": "chat.completion.chunk", "created": int(time.time()),
                 "model": model, "choices": [{"index": 0, "delta": {}, "finish_reason": final_finish}]}
             um = state.get("usage", {})
