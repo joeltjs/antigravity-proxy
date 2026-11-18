@@ -828,8 +828,20 @@ def _flatten_old_history(messages, keep_recent, transcript_budget):
         return messages
 
     old, recent = convo[:-keep_recent], convo[-keep_recent:]
-    while recent and recent[0].get("role") != "user":
+    # Drop ONLY orphaned tool results at the window boundary: a functionResponse whose
+    # functionCall landed in the transcript cannot be sent to Gemini (400).
+    # DO NOT strip until a "user" turn. An agent session (Kilo Code) has no user turn in its
+    # tail — it is assistant/tool pairs only — so the old loop
+    #     while recent and recent[0] != "user": recent = recent[1:]
+    # deleted the ENTIRE window (observed: 475 msgs -> 3), leaving the model with a summary
+    # and no idea what it just did. That is what caused the endless "thinking through how to
+    # approach this" loop.
+    while recent and recent[0].get("role") == "tool":
         recent = recent[1:]
+    # Hard floor: never hand the model an empty tail. If the boundary strip emptied the
+    # window, fall back to the newest few turns unconditionally.
+    if len(recent) < 4:
+        recent = convo[-min(len(convo), 8):]
 
     lines = []
     for m in old:
@@ -852,8 +864,13 @@ def _flatten_old_history(messages, keep_recent, transcript_budget):
     if not lines:
         return messages
 
-    header = "=== RIWAYAT PERCAKAPAN SEBELUMNYA (transkrip, jangan diulang) ==="
-    footer = "=== AKHIR RIWAYAT - lanjutkan percakapan dari sini ==="
+    header = ("=== RIWAYAT PERCAKAPAN SEBELUMNYA (transkrip ringkas) ===\n"
+              "Semua langkah di bawah SUDAH SELESAI dijalankan. JANGAN mengulanginya, "
+              "jangan merencanakan ulang dari awal. Lanjutkan tepat dari langkah terakhir.")
+    footer = ("=== AKHIR RIWAYAT ===\n"
+              "Semua langkah di atas SUDAH dijalankan. Lanjutkan tugas sampai selesai: "
+              "langsung panggil tool yang diperlukan, JANGAN minta izin ke pengguna, "
+              "JANGAN mengulang langkah yang sudah ada di transkrip.")
 
     # Budget trim: shorten the oldest lines first, keep the newest ones intact.
     body_len = sum(len(x) + 2 for x in lines)
@@ -868,9 +885,11 @@ def _flatten_old_history(messages, keep_recent, transcript_budget):
         lines = trimmed
 
     transcript = header + "\n\n".join(lines) + "\n" + footer
+    # No synthetic assistant bridge: a fake model turn between the transcript and the live
+    # tail pushes the model into answering conversationally ("mau saya lanjutkan?") instead
+    # of calling the next tool. Keep the message list as transcript(user) + real tail.
     out = system_msgs + [
         {"role": "user", "content": transcript, "_proxy_transcript": True},
-        {"role": "assistant", "content": "Baik, riwayat sudah saya baca. Lanjutkan."},
     ] + recent
     print(f"[CTX] flatten: {len(messages)} -> {len(out)} msgs "
           f"({len(old)} pesan lama jadi 1 transkrip {len(transcript)} chars, isi dipertahankan)")
@@ -1363,9 +1382,14 @@ def antigravity_to_openai(ag_response, model_name, request_id):
     if reasoning_content: message["reasoning_content"] = reasoning_content
     if tool_calls: message["tool_calls"] = tool_calls
     if not content and not tool_calls: message["content"] = ""
+    # OpenAI contract: a turn that ends in function calls reports finish_reason "tool_calls".
+    # Agent clients (Kilo Code, Cline, Roo) key off this to dispatch the tool; sending "stop"
+    # makes them think the turn produced no action, so they re-send the same prompt forever —
+    # the visible symptom is an endless "I'm thinking through how to approach this".
     return {"id": request_id, "object": "chat.completion", "created": int(time.time()),
         "model": model_name,
-        "choices": [{"index": 0, "message": message, "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": message,
+                     "finish_reason": "tool_calls" if tool_calls else "stop"}],
         "usage": {"prompt_tokens": usage.get("promptTokenCount", 0),
             "completion_tokens": usage.get("candidatesTokenCount", 0),
             "total_tokens": usage.get("totalTokenCount", 0),
@@ -1414,6 +1438,10 @@ def antigravity_chunk_to_openai(chunk_data, model_name, request_id, state):
     if finish_reason:
         finish_map = {"STOP": "stop", "MAX_TOKENS": "length", "SAFETY": "content_filter", "RECITATION": "content_filter"}
         openai_finish = finish_map.get(finish_reason, "stop")
+        # Same contract as the non-stream path: tool calls must end the turn as "tool_calls",
+        # otherwise agent clients keep re-sending the same prompt (the loop).
+        if state.get("tool_calls") and openai_finish == "stop":
+            openai_finish = "tool_calls"
     if not delta and not openai_finish: return None
     chunk = {"id": request_id, "object": "chat.completion.chunk", "created": int(time.time()),
         "model": model_name,
@@ -2366,8 +2394,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
                             break
                     except json.JSONDecodeError:
                         break
+            final_finish = "tool_calls" if state.get("tool_calls") else "stop"
             final = {"id": request_id, "object": "chat.completion.chunk", "created": int(time.time()),
-                "model": model, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+                "model": model, "choices": [{"index": 0, "delta": {}, "finish_reason": final_finish}]}
             um = state.get("usage", {})
             if um:
                 final["usage"] = {
