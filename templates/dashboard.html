@@ -125,6 +125,7 @@
   <div class="header">
     <h1><span class="header-title-main">Antigravity</span> Proxy <span class="tag tag-roundrobin" id="strategy-tag">round-robin</span></h1>
     <div class="header-actions">
+      <button class="btn btn-sm" id="test-all-btn" onclick="testAllAccounts()" title="Kirim satu request nyata ke tiap akun: cek benar-benar terkirim / gagal, sekaligus baca label langganan (Pro/Free) dari Google">Test All Accounts</button>
       <button class="btn btn-ghost btn-sm" onclick="importFrom9router()" title="Import accounts from local 9router SQLite database">Import 9router</button>
       <button class="btn btn-ghost btn-sm" id="start-acc-btn" onclick="showSelectStartModal()" title="Select starting active account">Start: <span id="current-start-label" style="color:#38bdf8;font-weight:600">auto</span></button>
       <button class="btn btn-ghost btn-sm" onclick="showAllModels()" title="List all upstream models per pool">Models</button>
@@ -543,11 +544,16 @@ async function load() {
           const toggleBtn = a.disabled
             ? `<button class="btn btn-ghost btn-sm" onclick="toggleAcc(${idx})">Enable</button>`
             : `<button class="btn btn-ghost btn-sm" onclick="toggleAcc(${idx})">Disable</button>`;
+          const testTag = a.last_test
+            ? (a.last_test.ok
+                ? `<span class="badge b-ok" title="Tes terakhir OK · ${esc(String(a.last_test.plan || 'plan tidak terbaca'))} · ${a.last_test.latency_ms || '?'} ms">${esc(String(a.last_test.plan || 'OK'))}</span>`
+                : `<span class="badge b-err" title="${esc(String(a.last_test.error || 'tes gagal'))}">TEST FAIL</span>`)
+            : '';
           return `<div class="acc-card ${a.disabled ? 'disabled' : ''}">
             <div>
               <div class="acc-header">
                 <span class="acc-email">${esc(a.email)}</span>
-                <div style="display:flex;gap:6px;align-items:center">${badge}${toggleBtn}<button class="btn btn-danger btn-sm" onclick="removeAcc(${idx})">Delete</button></div>
+                <div style="display:flex;gap:6px;align-items:center">${testTag}${badge}${toggleBtn}<button class="btn btn-danger btn-sm" onclick="removeAcc(${idx})">Delete</button></div>
               </div>
               <div class="acc-stats">
                 <span> TTL: <b>${expMin}</b></span>
@@ -580,6 +586,64 @@ async function refreshQuota() {
   document.getElementById('last-refresh').innerHTML = '<span class="spinner"></span> Refreshing...';
   await api('/v1/quota', {method:'GET'});
   load();
+}
+// Tes semua akun: satu request NYATA ke upstream per akun (bukan cuma baca token cache).
+async function testAllAccounts() {
+  const btn = document.getElementById('test-all-btn');
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Testing...';
+  try {
+    const d = await api('/v1/accounts/test', {method:'POST', body: JSON.stringify({})});
+    renderTestResults(d);
+  } catch (e) {
+    showToast('Tes gagal: ' + e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prev;
+    load();
+  }
+}
+function renderTestResults(d) {
+  const old = document.getElementById('test-modal');
+  if (old) old.remove();
+  const rows = (d.results || []).map(r => {
+    const okBadge = r.ok ? '<span class="badge b-ok">TERKIRIM</span>'
+                         : '<span class="badge b-err">GAGAL</span>';
+    const lat = (r.latency_ms != null) ? r.latency_ms + ' ms' : '-';
+    const quota = (r.quota_left != null) ? r.quota_left + '%' : '-';
+    const plan = r.plan
+      ? esc(String(r.plan)) + (r.plan_source ? ` <span style="color:#52525b;font-size:11px">(${esc(r.plan_source)})</span>` : '')
+      : '<span style="color:#52525b">tidak terbaca</span>';
+    const err = r.error ? `<div style="color:#f87171;font-size:11px;margin-top:3px">${esc(String(r.error))}</div>` : '';
+    return `<tr>
+      <td style="padding:7px 10px;border-bottom:1px solid #1e1e26">${esc(r.email)}${err}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #1e1e26">${okBadge}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #1e1e26;text-align:right">${lat}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #1e1e26;text-align:right">${quota}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #1e1e26">${plan}</td>
+    </tr>`;
+  }).join('');
+  const m = document.createElement('div');
+  m.className = 'modal-bg';
+  m.id = 'test-modal';
+  m.onclick = e => { if (e.target === m) m.remove(); };
+  m.innerHTML = `<div class="modal" style="max-width:820px">
+    <h3>Hasil Tes Semua Akun — ${esc(String(d.model || ''))}</h3>
+    <div style="font-size:12px;color:#94a3b8;margin-bottom:10px">
+      <b>${d.ok_count || 0}/${d.total || 0}</b> akun benar-benar menerima jawaban dari upstream.
+      Label langganan dibaca dari <code>loadCodeAssist</code> Google; kalau gagal, ditandai
+      <i>inferred</i> dari katalog model dan sifatnya perkiraan.
+    </div>
+    <table class="u-table" style="width:100%">
+      <thead><tr><th>Akun</th><th>Terkirim?</th><th class="num">Latency</th><th class="num">Sisa kuota</th><th>Label langganan</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+    <div style="margin-top:14px;text-align:right">
+      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('test-modal').remove()">Close</button>
+    </div>
+  </div>`;
+  document.body.appendChild(m);
 }
 let currentStrategy = 'round-robin';
 async function toggleStrategy() {

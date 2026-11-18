@@ -6,11 +6,21 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/ag-proxy
-ExecStart=/usr/bin/python3 -u /home/ubuntu/ag-proxy/server.py
+ExecStart=/home/ubuntu/ag-proxy/.venv/bin/python -u /home/ubuntu/ag-proxy/server.py
 Restart=always
 RestartSec=5
 StandardOutput=append:/home/ubuntu/ag-proxy/proxy.log
 StandardError=append:/home/ubuntu/ag-proxy/proxy.log
+# Long agent sessions: caps lifted on purpose (Julian 18 Nov 2026) so Kilo sessions
+# keep their full history instead of being flattened/cut mid-tool-output.
+# The system-prompt 429 fix (AG_SYS_AS_TURN) stays ON — it is unrelated to these caps.
+Environment=AG_SYS_AS_TURN=1
+Environment=AG_MAX_PROMPT_CHARS=5000000
+Environment=AG_MAX_MESSAGE_CHARS=400000
+Environment=AG_MAX_MESSAGES=5000
+Environment=AG_KEEP_RECENT_MESSAGES=4000
+Environment=AG_FLATTEN_ABOVE=5000
+Environment=AG_FLATTEN_KEEP_RECENT=4000
 
 [Install]
 WantedBy=multi-user.target

@@ -542,8 +542,138 @@ class AccountState:
             "errors": self.error_count,
             "last_error": self.last_error,
             "quota": self.quota,
-            "quota_age": int(time.time() - self.quota_fetched_at) if self.quota_fetched_at else -1
+            "quota_age": int(time.time() - self.quota_fetched_at) if self.quota_fetched_at else -1,
+            "last_test": getattr(self, "last_test", None),
         }
+
+
+LOAD_CODE_ASSIST_URLS = (
+    "https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist",
+)
+
+
+def probe_plan(acc, token):
+    """Best-effort subscription tier from Google's loadCodeAssist.
+
+    Returns {"id","name"} when the call works. The value is whatever Google reports
+    (e.g. "free-tier" / "standard" / "ultra"); it is NOT an independent verification,
+    so the dashboard always shows where the label came from.
+    """
+    last_err = None
+    for url in LOAD_CODE_ASSIST_URLS:
+        try:
+            req = urllib.request.Request(
+                url, data=b'{"metadata":{"pluginType":"GEMINI"}}',
+                headers={"Authorization": f"Bearer {token}",
+                         "Content-Type": "application/json",
+                         **ANTIGRAVITY_CLIENT_HEADERS})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = json.loads(resp.read().decode())
+            tier = data.get("currentTier") or {}
+            if isinstance(tier, dict) and (tier.get("id") or tier.get("name")):
+                # allowedTiers + top-level keys are captured so the dashboard can show
+                # WHAT Google actually said (tier ids only, no credentials).
+                return {
+                    "id": tier.get("id"),
+                    "name": tier.get("name"),
+                    "tier": {k: tier.get(k) for k in ("id", "name", "description") if tier.get(k)},
+                    "allowed_tiers": [t.get("id") for t in (data.get("allowedTiers") or [])
+                                      if isinstance(t, dict) and t.get("id")],
+                    "paid_tier": ({k: v for k, v in (data.get("paidTier") or {}).items()
+                                   if k in ("id", "name", "description")}
+                                  if isinstance(data.get("paidTier"), dict) else data.get("paidTier")),
+                    "upgrade_uri": data.get("upgradeSubscriptionUri"),
+                    "keys": sorted(data.keys()),
+                }
+            last_err = "no currentTier in reply"
+        except Exception as e:
+            last_err = str(e)[:140]
+    return {"id": None, "name": None, "error": last_err}
+
+
+def probe_account(acc, model):
+    """One real end-to-end check for ONE account: token -> plan -> generate -> quota.
+
+    Deliberately sends an actual upstream request (16 output tokens) instead of only
+    reading cached quota, because a saved token proves nothing about whether the
+    account can still answer right now.
+    """
+    res = {"email": acc.email, "ok": False, "http": None, "latency_ms": None,
+           "error": None, "plan": None, "plan_id": None, "plan_source": None,
+           "quota_left": None, "reset": None, "checked_at": int(time.time())}
+    t0 = time.time()
+    try:
+        token = acc.get_token()
+    except Exception as e:
+        res["error"] = f"token refresh failed: {e}"
+        res["latency_ms"] = int((time.time() - t0) * 1000)
+        acc.last_test = res
+        return res
+
+    plan = probe_plan(acc, token)
+    if plan.get("id") or plan.get("name"):
+        res["plan"] = plan.get("name") or plan.get("id")
+        res["plan_id"] = plan.get("id")
+        res["plan_source"] = "loadCodeAssist"
+        res["plan_detail"] = plan.get("tier")
+        res["allowed_tiers"] = plan.get("allowed_tiers")
+        res["paid_tier"] = plan.get("paid_tier")
+        res["upgrade_uri"] = plan.get("upgrade_uri")
+        res["plan_keys"] = plan.get("keys")
+        # Google reports CloudCode's own tier ("free-tier" for every Antigravity install);
+        # the real Google AI Pro/Ultra subscription shows up in paidTier. Say which one the
+        # label came from instead of pretending the two are the same thing.
+        paid = plan.get("paid_tier") if isinstance(plan.get("paid_tier"), dict) else {}
+        if paid.get("id") or paid.get("name"):
+            res["plan"] = f"{paid.get('name') or paid.get('id')} (paidTier)"
+        else:
+            res["plan"] = f"{plan.get('id') or res['plan']} · no paidTier"
+    elif plan.get("error"):
+        res["plan_error"] = plan["error"]
+
+    try:
+        body = {"model": model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 16}
+        ag_body, _ = openai_to_antigravity(body)
+        ag_body["request"]["sessionId"] = resolve_client_session_id(body, acc.email)
+        req = urllib.request.Request(
+            API_ENDPOINT, data=json.dumps(ag_body).encode(),
+            headers={"Authorization": f"Bearer {token}",
+                     "Content-Type": "application/json",
+                     **ANTIGRAVITY_CLIENT_HEADERS})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8", "replace")
+        res["latency_ms"] = int((time.time() - t0) * 1000)
+        res["http"] = 200
+        res["ok"] = '"candidates"' in raw
+        if not res["ok"]:
+            res["error"] = "upstream replied without candidates"
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", "replace")
+        res["http"] = e.code
+        res["latency_ms"] = int((time.time() - t0) * 1000)
+        res["error"] = f"HTTP {e.code}: {' '.join(err_body.split())[:220]}"
+        if e.code == 401:
+            acc.access_token = None
+            acc.expires_at = 0
+    except Exception as e:
+        res["latency_ms"] = int((time.time() - t0) * 1000)
+        res["error"] = str(e)[:220]
+
+    acc.fetch_quota()
+    if not res["plan"] and acc.quota:
+        has_claude = any(k.startswith("claude-") for k in acc.quota)
+        res["plan"] = "Pro/Ultra (inferred)" if has_claude else "Free (inferred)"
+        res["plan_source"] = "model-catalog"
+    upstream_id = MODEL_MAP.get(model, model)
+    q = acc.quota.get(upstream_id) or acc.quota.get(model) or {}
+    if q:
+        res["quota_left"] = round(float(q.get("remainingFraction") or 0) * 100, 1)
+        res["reset"] = q.get("resetTime")
+    acc.last_test = res
+    return res
 
 
 ACCOUNT_STATES = [AccountState(a) for a in ACCOUNTS]
@@ -2159,6 +2289,45 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": {"message": "Not found"}})
             return
 
+        if self.path == "/v1/accounts/test":
+            body_raw, err = self._read_body(4096)
+            model = "gemini-3.8-flash-medium"
+            if body_raw:
+                try:
+                    model = (json.loads(body_raw) or {}).get("model") or model
+                except Exception:
+                    pass
+            targets = [a for a in ACCOUNT_STATES if not a.disabled]
+            if not targets:
+                self._send_json(200, {"model": model, "results": [],
+                                      "note": "no enabled accounts"})
+                return
+            out: list = [None] * len(targets)
+
+            def _run(i, acc):
+                try:
+                    out[i] = probe_account(acc, model)
+                except Exception as e:
+                    out[i] = {"email": acc.email, "ok": False,
+                              "error": f"probe crashed: {e}"[:200],
+                              "checked_at": int(time.time())}
+
+            workers = [threading.Thread(target=_run, args=(i, a), daemon=True)
+                       for i, a in enumerate(targets)]
+            for w in workers:
+                w.start()
+            for w in workers:
+                w.join(timeout=90)
+            results = [r if r else {"email": targets[i].email, "ok": False,
+                                    "error": "timeout >90s",
+                                    "checked_at": int(time.time())}
+                       for i, r in enumerate(out)]
+            ok_count = sum(1 for r in results if r.get("ok"))
+            log_event("INFO", f"Account test: {ok_count}/{len(results)} OK (model={model})")
+            self._send_json(200, {"model": model, "ok_count": ok_count,
+                                  "total": len(results), "results": results})
+            return
+
         if self.path != "/v1/chat/completions":
             self._send_json(404, {"error": {"message": "Not found"}})
             return
@@ -2177,7 +2346,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         stream = body.get("stream", False)
         request_id = f"chatcmpl-{int(time.time()*1000)}"
         usage_start = time.time()  # for usage stats; never affects the request
-        print(f"\n[REQ] model={model} stream={stream} msgs={len(body.get('messages',[]))} keys={sorted(body.keys())}")
+        print(f"\n[REQ] id={request_id} model={model} stream={stream} msgs={len(body.get('messages',[]))} keys={sorted(body.keys())}")
         # Payload size matters: Google returns 429 RESOURCE_EXHAUSTED (not 400) for requests
         # whose prompt blows past the per-account token budget, so record the dimensions that
         # actually drive it — otherwise a big-tools client failure looks like an empty quota.
@@ -2369,6 +2538,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         except Exception as e:
             track_end(request_id)
             record_usage(model, 0, 0, 0, "error", (time.time() - started) * 1000)
+            log_event("ERR", f"{model} via {account.email} FAILED ({type(e).__name__}): {e}")
+            print(f"  [ERR] {account.email}: {type(e).__name__}: {e}")
             self._send_json(500, {"error": {"message": f"Parse error: {e}"}})
 
     def _merge_chunks(self, chunks):
@@ -2455,6 +2626,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
             print(f"  [OK] {account.email} -> stream done")
         except Exception as e:
             record_usage(model, 0, 0, 0, "error", (time.time() - started) * 1000)
+            # Sebelumnya jalur ini SENYAP: client dapat error di Kilo tapi proxy.log kosong.
+            # Sekarang setiap kegagalan mid-stream (client putus / upstream reset) tercatat.
+            kind = type(e).__name__
+            if isinstance(e, (BrokenPipeError, ConnectionResetError)) or "Broken pipe" in str(e):
+                log_event("WARN", f"STREAM {model} via {account.email} CLIENT ABORT ({kind}): {e}")
+                print(f"  [ABORT] {account.email} -> client closed the stream early")
+            else:
+                log_event("ERR", f"STREAM {model} via {account.email} FAILED ({kind}): {e}")
+                print(f"  [ERR-STREAM] {account.email}: {kind}: {e}")
             err_chunk = {"id": request_id, "object": "chat.completion.chunk", "created": int(time.time()),
                 "model": model, "choices": [{"index": 0, "delta": {"content": f"\n[Proxy Error: {e}]"}, "finish_reason": "stop"}]}
             try:
