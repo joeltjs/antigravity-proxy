@@ -23,6 +23,7 @@
   .header .tag{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.3px}
   .tag-roundrobin{background:rgba(56,189,248,0.15);color:#38bdf8;border:1px solid rgba(56,189,248,0.3)}
   .tag-sticky{background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.3)}
+  .tag-restrict{background:rgba(34,197,94,0.15);color:#4ade80;border:1px solid rgba(34,197,94,0.35)}
   .btn{display:inline-flex;align-items:center;gap:6px;background:#0284c7;color:#fff;text-decoration:none;padding:8px 14px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid rgba(255,255,255,0.1);cursor:pointer;transition:all .15s ease}
   .btn:hover{background:#0369a1;transform:translateY(-1px);box-shadow:0 4px 12px rgba(2,132,199,0.3)}
   .btn-sm{padding:5px 12px;font-size:12px;border-radius:6px}
@@ -129,7 +130,7 @@
       <button class="btn btn-ghost btn-sm" onclick="importFrom9router()" title="Import accounts from local 9router SQLite database">Import 9router</button>
       <button class="btn btn-ghost btn-sm" id="start-acc-btn" onclick="showSelectStartModal()" title="Select starting active account">Start: <span id="current-start-label" style="color:#38bdf8;font-weight:600">auto</span></button>
       <button class="btn btn-ghost btn-sm" onclick="showAllModels()" title="List all upstream models per pool">Models</button>
-      <button class="btn btn-ghost btn-sm" id="strategy-btn" onclick="toggleStrategy()" title="Click to change routing mode">Change Mode</button>
+      <button class="btn btn-ghost btn-sm" id="strategy-btn" onclick="toggleStrategy()" title="Siklus 3 mode: round-robin → sticky → restrict">Change Mode</button>
       <button class="btn btn-ghost btn-sm" onclick="refreshQuota()">Refresh Quota</button>
       <button class="btn btn-sm" onclick="showAddModal()">Add Account</button>
     </div>
@@ -513,7 +514,7 @@ async function load() {
     const sTag = document.getElementById('strategy-tag');
     const strat = data.strategy || 'round-robin';
     sTag.textContent = strat;
-    sTag.className = 'tag ' + (strat === 'sticky' ? 'tag-sticky' : 'tag-roundrobin');
+    sTag.className = 'tag ' + (strat === 'sticky' ? 'tag-sticky' : strat === 'restrict' ? 'tag-restrict' : 'tag-roundrobin');
     currentStrategy = data.strategy || 'round-robin';
     updateOptimizerUI(data.optimizers);
     let totalReq=0, totalErr=0, active=0;
@@ -646,8 +647,17 @@ function renderTestResults(d) {
   document.body.appendChild(m);
 }
 let currentStrategy = 'round-robin';
+// Siklus 3 mode. Dulu tombol ini cuma round-robin <-> sticky, jadi sekali klik
+// otomatis melempar keluar dari 'restrict' yang sudah dipilih manual.
+const STRATEGY_CYCLE = ['round-robin', 'sticky', 'restrict'];
+const STRATEGY_INFO = {
+  'round-robin': 'Round-robin: ganti akun tiap request',
+  'sticky': 'Sticky: 1 akun sampai kena limit, lalu pindah',
+  'restrict': 'Restrict: 1 akun terkunci, TIDAK pernah pindah otomatis (client yang backoff)'
+};
 async function toggleStrategy() {
-  const newStrategy = currentStrategy === 'round-robin' ? 'sticky' : 'round-robin';
+  const idx = STRATEGY_CYCLE.indexOf(currentStrategy);
+  const newStrategy = STRATEGY_CYCLE[(idx + 1) % STRATEGY_CYCLE.length];
   const r = await fetch('/v1/strategy', {
     method: 'PUT',
     credentials: 'same-origin',
@@ -659,10 +669,8 @@ async function toggleStrategy() {
     currentStrategy = d.strategy;
     const sTag = document.getElementById('strategy-tag');
     sTag.textContent = d.strategy;
-    sTag.className = 'tag ' + (d.strategy === 'sticky' ? 'tag-sticky' : 'tag-roundrobin');
-    showToast(d.strategy === 'sticky'
-      ? ' Sticky mode: use 1 account until rate limit, then switch'
-      : ' Round-robin mode: alternate accounts per request');
+    sTag.className = 'tag ' + (d.strategy === 'sticky' ? 'tag-sticky' : d.strategy === 'restrict' ? 'tag-restrict' : 'tag-roundrobin');
+    showToast(STRATEGY_INFO[d.strategy] || d.strategy);
   }
 }
 async function removeAcc(idx) {
