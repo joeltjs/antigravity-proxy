@@ -626,9 +626,11 @@ def probe_account(acc, model):
         # label came from instead of pretending the two are the same thing.
         paid = plan.get("paid_tier") if isinstance(plan.get("paid_tier"), dict) else {}
         if paid.get("id") or paid.get("name"):
-            res["plan"] = f"{paid.get('name') or paid.get('id')} (paidTier)"
+            res["plan"] = "Pro"          # paidTier ada -> langganan berbayar aktif
+            res["plan_detail_label"] = paid.get("name") or paid.get("id")
         else:
-            res["plan"] = f"{plan.get('id') or res['plan']} · no paidTier"
+            res["plan"] = "Free"         # tidak ada paidTier -> tier gratis
+            res["plan_detail_label"] = plan.get("id") or "free-tier"
     elif plan.get("error"):
         res["plan_error"] = plan["error"]
 
@@ -1456,9 +1458,15 @@ def openai_to_antigravity(body, request_headers=None):
                 "thinkingBudget": budget,
                 "includeThoughts": True
             }
-        # Claude/Gemini both require max_tokens > thinking budget — bump if needed
-        if max_tokens <= budget:
-            gen_config["maxOutputTokens"] = budget + 4096
+        # Thinking tokens are billed INSIDE maxOutputTokens. With thinkingLevel=high a
+        # client asking for max_tokens=32000 only gets ~7k of visible answer once thinking
+        # eats 24576, and the turn comes back MAX_TOKENS ("hit its output limit").
+        # Reserve the thinking budget ON TOP of what the client asked for, capped at the
+        # largest ceiling any Antigravity model advertises (64000).
+        _want = max(max_tokens + budget, budget + 4096)   # keep the old floor too
+        _capped = min(_want, 64000)
+        if _capped > gen_config["maxOutputTokens"]:
+            gen_config["maxOutputTokens"] = _capped
     tools = []
     # Tool schemas are a fixed token tax on EVERY request. An agent client like Hermes ships
     # 34 functions (~71 KB, ~18k tokens) before a single word of conversation, which competes
@@ -2622,7 +2630,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                              um.get("cachedContentTokenCount", 0), "ok", (time.time() - started) * 1000)
             except Exception:
                 pass  # usage is additive; never fail the response
-            log_event("INFO", f"STREAM {model} via {account.email} done")
+            log_event("INFO", f"STREAM {model} via {account.email} done finish={final_finish} "
+                           f"out={um.get('candidatesTokenCount',0)} think={um.get('thoughtsTokenCount',0)}")
             print(f"  [OK] {account.email} -> stream done")
         except Exception as e:
             record_usage(model, 0, 0, 0, "error", (time.time() - started) * 1000)

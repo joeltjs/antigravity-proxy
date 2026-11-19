@@ -614,7 +614,7 @@ function renderTestResults(d) {
     const lat = (r.latency_ms != null) ? r.latency_ms + ' ms' : '-';
     const quota = (r.quota_left != null) ? r.quota_left + '%' : '-';
     const plan = r.plan
-      ? esc(String(r.plan)) + (r.plan_source ? ` <span style="color:#52525b;font-size:11px">(${esc(r.plan_source)})</span>` : '')
+      ? `<b>${esc(String(r.plan))}</b>` + (r.plan_detail_label ? ` <span style="color:#52525b;font-size:11px">${esc(String(r.plan_detail_label))}</span>` : '')
       : '<span style="color:#52525b">tidak terbaca</span>';
     const err = r.error ? `<div style="color:#f87171;font-size:11px;margin-top:3px">${esc(String(r.error))}</div>` : '';
     return `<tr>
@@ -633,8 +633,9 @@ function renderTestResults(d) {
     <h3>Hasil Tes Semua Akun — ${esc(String(d.model || ''))}</h3>
     <div style="font-size:12px;color:#94a3b8;margin-bottom:10px">
       <b>${d.ok_count || 0}/${d.total || 0}</b> akun benar-benar menerima jawaban dari upstream.
-      Label langganan dibaca dari <code>loadCodeAssist</code> Google; kalau gagal, ditandai
-      <i>inferred</i> dari katalog model dan sifatnya perkiraan.
+      <b>Pro</b> = akun punya langganan berbayar (Google melaporkan <code>paidTier</code>),
+      <b>Free</b> = tidak ada <code>paidTier</code>. Nama detail di sebelahnya adalah nilai
+      mentah dari Google.
     </div>
     <table class="u-table" style="width:100%">
       <thead><tr><th>Akun</th><th>Terkirim?</th><th class="num">Latency</th><th class="num">Sisa kuota</th><th>Label langganan</th></tr></thead>
