@@ -1442,28 +1442,31 @@ def openai_to_antigravity(body, request_headers=None):
             reasoning_effort = "low"
 
     if reasoning_effort:
-        # Minimum output budget per thinking level. With tiered models the `thinkingLevel`
-        # consumes part of maxOutputTokens, so a small client max_tokens leaves zero room
-        # for the visible answer (model stops with EMPTY content). Always reserve headroom.
+        # AG_THINKING_GUARD=0 (default since 19 Nov 2026) restores the pre-16-Nov behaviour:
+        # no thinkingBudget cap, the model decides how long to think. That cap only ever
+        # became live on 16 Nov (commit 67160fe moved it out of the unused
+        # core/translator.py into server.py, so before that it never took effect).
+        # Set AG_THINKING_GUARD=1 to cap thinking again.
+        thinking_guard = os.environ.get("AG_THINKING_GUARD", "0") != "0"
         budget_map = {"low": 1024, "medium": 8192, "high": 24576}
         budget = budget_map.get(reasoning_effort, 8192)
-        # Tiered models use thinkingLevel, others use thinkingBudget
         if ag_model and "tiered" in str(ag_model):
             gen_config["thinkingConfig"] = {
                 "thinkingLevel": reasoning_effort,
                 "includeThoughts": True
             }
-        else:
+        elif thinking_guard:
             gen_config["thinkingConfig"] = {
                 "thinkingBudget": budget,
                 "includeThoughts": True
             }
-        # Thinking tokens are billed INSIDE maxOutputTokens. With thinkingLevel=high a
-        # client asking for max_tokens=32000 only gets ~7k of visible answer once thinking
-        # eats 24576, and the turn comes back MAX_TOKENS ("hit its output limit").
-        # Reserve the thinking budget ON TOP of what the client asked for, capped at the
-        # largest ceiling any Antigravity model advertises (64000).
-        _want = max(max_tokens + budget, budget + 4096)   # keep the old floor too
+        else:
+            # Uncapped: no thinkingBudget sent, thoughts still returned to the client.
+            gen_config["thinkingConfig"] = {"includeThoughts": True}
+        # Thinking still consumes maxOutputTokens, so the ceiling has to leave room for
+        # BOTH. Guarded mode reserves the capped budget; uncapped mode reserves 32k of
+        # thinking room, and the client's own max_tokens stays available for the answer.
+        _want = max(max_tokens + budget, budget + 4096) if thinking_guard else (max_tokens + 32768)
         _capped = min(_want, 64000)
         if _capped > gen_config["maxOutputTokens"]:
             gen_config["maxOutputTokens"] = _capped
