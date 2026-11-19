@@ -1509,6 +1509,10 @@ def openai_to_antigravity(body, request_headers=None):
         else:
             ag_request["request"]["systemInstruction"] = system_instruction
     if tools: ag_request["request"]["tools"] = tools
+    # Jejak mentah apa yang benar-benar dikirim ke Google, supaya "masih dicap atau
+    # tidak" bisa dibaca langsung dari log, bukan dari penjelasan.
+    print(f"[GEN] maxOutputTokens={gen_config.get('maxOutputTokens')} "
+          f"thinkingConfig={gen_config.get('thinkingConfig')}")
     return ag_request, stream
 
 
